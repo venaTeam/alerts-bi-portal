@@ -17,11 +17,10 @@ from alerts_bi_shared.ui.charts import ChartPoint, line_chart
 from alerts_bi_shared.ui.summary_view import render_summary_sections
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
-from alerts_bi_portal.app import SECURITY_HEADERS, build_portal, client_allowed
-from alerts_bi_portal.config import PortalSettings, parse_networks
-from alerts_bi_portal.pages import alert_page, rule_link_for, safe_link, team_page
-from alerts_bi_portal.queries import (
+from src.app import SECURITY_HEADERS, build_portal, client_allowed
+from src.config import PortalSettings, parse_networks
+from src.pages import alert_page, rule_link_for, safe_link, team_page
+from src.queries import (
     AlertDetail,
     AlertRow,
     Decision,
@@ -29,11 +28,12 @@ from alerts_bi_portal.queries import (
     SchemaTotals,
     WorklistPage,
 )
+
 from tests.unit.test_portal_summary_view import ALERTS as SUMMARY_ALERTS
 from tests.unit.test_portal_summary_view import alert as summary_alert
 from tests.unit.test_portal_summary_view import build_summary
 
-PORTAL_DIR = Path(__file__).resolve().parents[2] / "src" / "alerts_bi_portal"
+PORTAL_DIR = Path(__file__).resolve().parents[2] / "src"
 SETTINGS = PortalSettings(sql=load_sql_config(), database="alerts_bi_test")
 
 #: Packages a reader's request must have no path to.

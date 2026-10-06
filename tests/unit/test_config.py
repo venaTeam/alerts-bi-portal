@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 from alerts_bi_shared.config.sql import load_sql_config
-
-from alerts_bi_portal.config import load_portal_settings
+from src.config import load_portal_settings
 
 
 def test_portal_uses_the_exact_shared_sql_connection(monkeypatch: pytest.MonkeyPatch) -> None:

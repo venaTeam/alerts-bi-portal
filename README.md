@@ -48,3 +48,9 @@ from this clone alone. Update the shared wheel with its source release and contr
 never edit a released wheel in place.
 
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
+
+
+Application code lives directly in `src/`. Local tests import `src`, while setuptools
+maps that directory to the service's distinct installed Python package. The console
+command and Docker listener are unchanged. `uv sync --frozen` installs the editable
+mapping; `uv build` produces the independently installable wheel and source archive.

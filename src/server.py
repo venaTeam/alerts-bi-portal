@@ -5,8 +5,8 @@ from __future__ import annotations
 import uvicorn
 from alerts_bi_shared.logging_setup import log
 
-from alerts_bi_portal.app import build_portal
-from alerts_bi_portal.config import PortalSettings
+from .app import build_portal
+from .config import PortalSettings
 
 __all__ = ["serve"]
 

@@ -7,8 +7,8 @@ import sys
 
 from alerts_bi_shared.logging_setup import log, redact_error
 
-from alerts_bi_portal.config import load_portal_settings
-from alerts_bi_portal.server import serve
+from .config import load_portal_settings
+from .server import serve
 
 
 def build_parser() -> argparse.ArgumentParser:

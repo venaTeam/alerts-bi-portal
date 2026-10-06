@@ -28,7 +28,7 @@ def schema_probes() -> tuple[str, ...]:
     environment value can supply SQL identifiers; validation also prevents a mistaken
     contract update from expanding readiness outside the six approved reader views.
     """
-    rows = json.loads(files("alerts_bi_portal").joinpath("sql-views.json").read_text("utf-8"))
+    rows = json.loads(files(__package__).joinpath("sql-views.json").read_text("utf-8"))
     columns: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for row in rows:
         view = str(row["view_name"])

@@ -30,7 +30,7 @@ from alerts_bi_shared.ui.explain import (
 )
 from alerts_bi_shared.ui.html import PHASE_STEPS, SCHEMA_NAMES, h, safe_link
 
-from alerts_bi_portal.queries import (
+from .queries import (
     AlertDetail,
     AlertRow,
     Decision,

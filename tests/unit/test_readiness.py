@@ -11,10 +11,9 @@ import pytest
 from alerts_bi_shared.config.sql import load_sql_config
 from alerts_bi_shared.db.connection import Database
 from fastapi.testclient import TestClient
-
-from alerts_bi_portal import app
-from alerts_bi_portal.config import PortalSettings
-from alerts_bi_portal.readiness import PORTAL_VIEWS, schema_probes
+from src import app
+from src.config import PortalSettings
+from src.readiness import PORTAL_VIEWS, schema_probes
 
 
 def client_for(monkeypatch: pytest.MonkeyPatch, db: Mock) -> TestClient:
@@ -29,7 +28,7 @@ def client_for(monkeypatch: pytest.MonkeyPatch, db: Mock) -> TestClient:
 
 def test_packaged_contract_matches_the_pinned_design_snapshot() -> None:
     snapshot = Path(__file__).resolve().parents[2] / "docs/upstream/contracts/sql-views.json"
-    resource = files("alerts_bi_portal").joinpath("sql-views.json")
+    resource = files("src").joinpath("sql-views.json")
     assert resource.read_bytes() == snapshot.read_bytes()
 
 

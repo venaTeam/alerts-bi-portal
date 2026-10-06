@@ -32,10 +32,10 @@ from alerts_bi_shared.versions import APP_VERSION
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
-from alerts_bi_portal import pages, queries
-from alerts_bi_portal.config import IpNetwork, PortalSettings
-from alerts_bi_portal.readiness import check_schema
-from alerts_bi_portal.summary_queries import load_portal_summary
+from . import pages, queries
+from .config import IpNetwork, PortalSettings
+from .readiness import check_schema
+from .summary_queries import load_portal_summary
 
 __all__ = ["READ_METHODS", "SECURITY_HEADERS", "build_portal", "client_allowed"]
 
