@@ -213,8 +213,8 @@ def test_every_tab_has_the_tab_bar_and_the_week_menu(name: str) -> None:
 
 def test_the_week_menu_keeps_the_open_tab_and_marks_the_week() -> None:
     page = PAGES["migration"]()
-    menu = page[page.index('<details class="menu">') :]
-    menu = menu[: menu.index("</details>")]
+    menu = page[page.index('<ul class="menu-list filter-popover"') :]
+    menu = menu[: menu.index("</ul>")]
     assert menu.count("/migration") == 2, "one link per published week, to the same tab"
     assert "/weeks/2026-09-21/migration" in menu and "/weeks/2026-09-28/migration" in menu
     assert menu.index("2026-09-28") < menu.index("2026-09-21"), "newest first"
@@ -279,7 +279,8 @@ def test_the_filters_keep_each_other_and_are_links() -> None:
     page = fix(state="rule_flagged", rule="R1")
     assert "schema=v1&amp;state=rule_flagged&amp;rule=R1#alerts" in page
     assert 'href="/teams/team%3Cx%3E/weeks/2026-09-28/fix?state=rule_flagged#alerts"' in page
-    assert "<form" not in page
+    assert page.count("<form") == 1, "only the global application picker is a form"
+    assert 'method="get"' in page
 
 
 def test_a_work_list_row_names_its_problems_and_decisions() -> None:

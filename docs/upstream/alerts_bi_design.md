@@ -1,5 +1,17 @@
 # Alerts BI — Design Document
 
+## Accepted consolidation — 2026-10-08
+
+The user approved implementing the team-centered unified operator mock. This amendment supersedes the separate unauthenticated trigger and admin web-service boundaries in sections 7.9, 7.12 and 7.16 and the original repository-separation decision. `alerts-bi-runs serve` now owns one authenticated operator console and its run API. The runs image contains the admin review implementation; it imports shared and operations libraries, never the sibling admin application. The legacy admin repository is retained for rollback and command-line tooling. Portal remains a separate read-only service; weekly jobs remain in the runs image.
+
+Navigation starts at Teams. Opening a team shows its paginated run history and a selected run with Overview, Findings, Decisions and Activity tabs. Overview retains the current summary, independent v1/v2 metrics, complete-day charts, filtered SQL work list, panel SQL and four approved exports. Findings exposes stored evidence and representative data to authenticated operators. Decisions shows the selected run's append-only audit history. Activity shows publication history and the team's schedule log. Analysis completion and publication state are separate.
+
+New run is scoped to the selected registered team, takes a UTC window end and live/fake/off model mode, and invokes the existing synchronous execution/persistence/reporting path under the existing process gate. Its window is exactly the preceding 168 hours. UI and JSON triggers share the gate. Manual completion does not publish. Existing publish/replace/gap, withdraw-with-reason and published-run decision rules remain authoritative. Actions return to the selected team/run; an explicit cross-team run selection is refused. No migration, scoring, prompt, deterministic identifier or output-content changes are authorized by this consolidation.
+
+All console and API routes require the proxy identity (or an explicitly supplied local `--dev-user`). The listener refuses non-loopback addresses and requires `ADMIN_SECRET` of at least 32 characters. Browser writes use same-site CSRF forms; JSON `POST /runs` requires `X-CSRF-Token` obtained from authenticated `GET /csrf`. No unauthenticated trigger Service remains in the deployment topology. Existing request/response payloads and export routes are retained behind authentication; the old API factory is a compatibility/test harness, not a deployment entry point. Default port is 8000; `ADMIN_*` configuration is retained with API bind/registry/output fallbacks. One replica and one worker preserve the existing process-local gate guarantee.
+
+The implementation remains server-rendered with a content-addressed stylesheet and a small same-origin script for trigger feedback. Empty teams, failed runs, refusal messages, keyboard-accessible forms and narrow viewports are required states. Infrastructure rollout is a separate authorized action; see `unified-console-deployment.md`.
+
 **Status:** MVP design settled and implemented; implementation language changed to Python (section 7.7); read-only review portal added (section 7.10); automatic weekly reviews (section 7.11); operator admin app (section 7.12); LLM review upgrade and evaluation tooling (section 7.13); team summary, R6 and `unseen` (section 7.14); the portal's team week split into tabs (section 7.10, amended 2026-10-04)
 **Last updated:** 2026-10-08
 
@@ -1080,3 +1092,39 @@ Setuptools maps that source directory to the distinct installed `alerts_bi_runs`
 `alerts_bi_portal`, or `alerts_bi_admin` namespace, so coordinated tests can install
 all three distributions without a module collision. Entry-point names, shared-library
 namespaces, immutable migrations/resources, and analysis versions remain unchanged.
+
+## Global portal application filter — 2026-10-08
+
+The product owner requested a multi-application selector on team pages and clarified that
+it applies across every tab. Place it above the tab navigation. List application values
+from this team's published alerts across its available weeks. Select several values,
+apply them together, remove individual selected values, or use **Show all** to restore the
+team view. A GET form and repeated `apps` query parameters keep the selection bookmarkable
+without scripts. `scope=selected` with no `apps` is an empty selection, not all applications.
+Unknown or absent values match no alerts; they never broaden the selection.
+
+Preserve the selection through Overview, Fix list, Volume, Dashboards, Migration, History,
+Slides, week navigation, alert detail/back links, local Fix list filters and pagination.
+Changing application selection resets pagination while retaining the local filters.
+Filter alerts, findings, weekly counts, weekly history and migration estimates consistently;
+keep v1 and v2 separate. Application options are not narrowed by other filters.
+
+Implementation treatment for existing stored data: weekly identity/event totals and
+per-rule matched events are available from `portal_alerts`; daily application buckets and
+the union of rule-flagged event matches are not. Do not infer daily points from first/last
+timestamps, add overlapping rule counts, or treat every event of an unseen identity as
+unseen. Show **Application breakdown unavailable** (or **event share unavailable**) where
+these metrics cannot be calculated, retaining accurate affected-alert counts. This change
+does not extend future run storage or change the SQL contract. The published team phase,
+team readiness percentage and review note remain whole-team context, explicitly labeled
+while filtering; readiness alert lists and remaining-work estimates use selected alerts.
+Slides identify the application selection in their footer and label team context.
+
+All existing read-only, network, publication-isolation, escaping and CSP guarantees apply.
+The default with no filter retains the current complete-team behavior.
+
+**Dropdown interaction, requested 2026-10-08:** the application and week selectors close
+when the reader clicks outside the open dropdown. Opening either selector closes the
+other; Escape also dismisses it. Interacting with application checkboxes keeps that
+dropdown open until Apply or dismissal. Use native automatic HTML popovers so the portal
+continues to work without scripts and retains its existing CSP and GET-only forms.

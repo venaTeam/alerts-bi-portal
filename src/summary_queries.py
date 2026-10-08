@@ -24,6 +24,9 @@ from alerts_bi_shared.insights import (
 from alerts_bi_shared.insights.daily import daily_points
 from alerts_bi_shared.insights.estimate import v1_rule_key
 
+from .application_filter import ALL_APPLICATIONS, ApplicationFilter, predicate
+from .queries import _evidence
+
 __all__ = ["daily_points", "load_portal_summary"]
 
 _SCHEMAS = ("v1", "v2")
@@ -59,7 +62,7 @@ def _schema_totals(rows: list[dict[str, Any]]) -> dict[str, SchemaTotals]:
             events=_int(row.get("events")),
             distinct_alerts=_int(row.get("distinct_alerts")),
             distinct_per_day=None,
-            rule_flagged_events=_int(row.get("flagged_rows")),
+            rule_flagged_events=_optional_int(row.get("flagged_rows", 0)),
             rule_flagged_alerts=_int(row.get("rule_flagged")),
             suppressed=_int(row.get("suppressed")),
             unseen=_optional_int(row.get("unseen")),
@@ -128,7 +131,12 @@ def _rule_key(application: str, alert_rule_url: str | None, week_end: datetime) 
     )
 
 
-def _history(db: Database, team_id: str, window_end: datetime) -> tuple[WeekRules, ...]:
+def _history(
+    db: Database,
+    team_id: str,
+    window_end: datetime,
+    applications: ApplicationFilter = ALL_APPLICATIONS,
+) -> tuple[WeekRules, ...]:
     """The selected week and the published weeks just before it that the estimate can use.
 
     Published weeks of one team never overlap, so ``window_end`` orders them strictly.
@@ -146,14 +154,16 @@ def _history(db: Database, team_id: str, window_end: datetime) -> tuple[WeekRule
     if not weeks:
         return ()
     run_params = {f"run{i}": str(week["run_id"]) for i, week in enumerate(weeks)}
+    app_clause, app_params = predicate(applications, "a.application")
     rules = db.query(
         f"""
         SELECT DISTINCT a.run_id, a.application, a.alert_rule_url
         FROM portal_alerts AS a
         WHERE a.alert_schema = 'v1' AND a.run_id IN ({", ".join(f":{name}" for name in run_params)})
+          AND {app_clause}
         ORDER BY a.run_id ASC, a.application ASC, a.alert_rule_url ASC
         """,
-        run_params,
+        {**run_params, **app_params},
     )
     ends = {str(week["run_id"]): week["window_end"] for week in weeks}
     keys: dict[str, set[str]] = defaultdict(set)
@@ -173,7 +183,9 @@ def _history(db: Database, team_id: str, window_end: datetime) -> tuple[WeekRule
     )
 
 
-def load_portal_summary(db: Database, team_id: str, run_id: str) -> SummaryInputs:
+def load_portal_summary(
+    db: Database, team_id: str, run_id: str, applications: ApplicationFilter = ALL_APPLICATIONS
+) -> SummaryInputs:
     """Build portal SummaryInputs for one published week from portal_* views only.
     history = the team's published weeks up to and including this one, oldest first,
     v1_rules = {v1_rule_key(...)} per week from portal_alerts where alert_schema = 'v1'.
@@ -222,19 +234,24 @@ def load_portal_summary(db: Database, team_id: str, run_id: str) -> SummaryInput
         """,
         {"run_id": run_id},
     )
+    app_clause, app_params = predicate(applications)
     alerts = db.query(
-        """
+        f"""
         SELECT alert_schema, application, key_field, message, severity, provider,
                alert_rule_url, component, node_name, row_count, first_seen, last_seen,
                quality_state, core_rule_ids, readiness_rule_ids, llm_principle_id,
                llm_confidence, clear_count, max_clear_cycles_24h, fire_pattern, unseen,
-               max_episode_firing_rows, open_since
+               max_episode_firing_rows, open_since, findings_evidence
         FROM portal_alerts
-        WHERE run_id = :run_id
+        WHERE run_id = :run_id AND {app_clause}
         ORDER BY alert_schema ASC, application ASC, key_field ASC
         """,
-        {"run_id": run_id},
+        {"run_id": run_id, **app_params},
     )
+
+    if applications.active:
+        totals, rules = _application_totals(alerts, totals)
+        daily = []
 
     return SummaryInputs(
         surface="portal",
@@ -256,7 +273,49 @@ def load_portal_summary(db: Database, team_id: str, run_id: str) -> SummaryInput
         ),
         alerts=tuple(_alert(row) for row in alerts),
         published=True,
-        history=_history(db, team_id, review["window_end"]),
+        history=_history(db, team_id, review["window_end"], applications),
         v1_rule_effort_days=_optional_float(review["v1_rule_effort_days"]),
         daily=daily_points(daily),
+        applications=applications.selected,
     )
+
+
+def _application_totals(
+    alerts: list[dict[str, Any]], team_totals: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Weekly identity counts and per-rule row counts are reconstructible; unions and
+    daily buckets are not. In particular, an unseen identity does not mean all its rows
+    were unseen, and adding per-rule counts double counts rows with multiple findings.
+    """
+    totals: list[dict[str, Any]] = []
+    rules: list[dict[str, Any]] = []
+    measured = {str(t["alert_schema"]): t.get("unseen") is not None for t in team_totals}
+    for schema in _SCHEMAS:
+        selected = [a for a in alerts if a["alert_schema"] == schema]
+        counts: dict[str, Any] = {
+            "alert_schema": schema,
+            "events": sum(_int(a["row_count"]) for a in selected),
+            "distinct_alerts": len(selected),
+            "flagged_rows": None if selected else 0,
+            "suppressed": 0,
+            "unseen": None,
+            "unseen_alerts": sum(bool(a["unseen"]) for a in selected)
+            if measured.get(schema)
+            else None,
+            "readiness_gaps": sum(bool(a["readiness_rule_ids"]) for a in selected),
+            **{s: sum(a["quality_state"] == s for a in selected) for s in _STATES},
+        }
+        rule_counts: dict[str, list[int]] = {}
+        for row in selected:
+            evidence = _evidence(row["findings_evidence"])
+            for rule_id in _ids(row["core_rule_ids"]) + _ids(row["readiness_rule_ids"]):
+                count = rule_counts.setdefault(rule_id, [0, 0])
+                count[0] += _int(evidence.get(rule_id, {}).get("matched_rows"))
+                count[1] += 1
+        for rule_id, (events, identities) in sorted(rule_counts.items()):
+            rules.append(
+                {"alert_schema": schema, "rule_id": rule_id, "events": events, "alerts": identities}
+            )
+        counts["suppressed"] = rule_counts.get("R5", [0, 0])[0]
+        totals.append(counts)
+    return totals, rules

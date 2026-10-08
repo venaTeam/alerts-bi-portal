@@ -27,12 +27,13 @@ from alerts_bi_shared.db.connection import Database, connect
 from alerts_bi_shared.insights import TeamSummary
 from alerts_bi_shared.insights.summary import summarize
 from alerts_bi_shared.logging_setup import log, redact_error
-from alerts_bi_shared.ui.assets import STYLESHEET, STYLESHEET_PATH
 from alerts_bi_shared.versions import APP_VERSION
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from . import pages, queries, tabs
+from .application_filter import from_request
+from .assets import STYLESHEET, STYLESHEET_PATH
 from .config import IpNetwork, PortalSettings
 from .readiness import check_schema
 from .summary_queries import load_portal_summary
@@ -150,8 +151,8 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             teams = queries.list_teams(db)
         return HTMLResponse(pages.directory_page(teams))
 
-    def _reviews(db: Database, team_id: str) -> list[queries.Review]:
-        reviews = queries.team_reviews(db, team_id)
+    def _reviews(db: Database, team_id: str, request: Request) -> list[queries.Review]:
+        reviews = queries.team_reviews(db, team_id, from_request(request))
         if not reviews:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "No published review for this team.")
         return reviews
@@ -169,7 +170,9 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No published review for that week.")
 
     def _summary(db: Database, selected: queries.Review) -> TeamSummary:
-        return summarize(load_portal_summary(db, selected.team_id, selected.run_id))
+        return summarize(
+            load_portal_summary(db, selected.team_id, selected.run_id, selected.applications)
+        )
 
     def _legacy_worklist(
         team_id: str, selected: queries.Review, request: Request
@@ -181,12 +184,15 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         params = {
             key: request.query_params[key] for key in WORKLIST_PARAMS if key in request.query_params
         }
-        target = pages.tab_url(team_id, selected.week, "fix", **params) + "#alerts"
+        target = (
+            pages.tab_url(team_id, selected.week, "fix", **params, **selected.applications.params)
+            + "#alerts"
+        )
         return RedirectResponse(target, status.HTTP_303_SEE_OTHER)
 
-    def _tab(team_id: str, week: str | None, tab: str) -> HTMLResponse:
+    def _tab(team_id: str, week: str | None, tab: str, request: Request) -> HTMLResponse:
         with database() as db:
-            reviews = _reviews(db, team_id)
+            reviews = _reviews(db, team_id, request)
             selected = reviews[-1] if week is None else _week(reviews, week)
             if tab == "history":
                 return HTMLResponse(tabs.history_page(reviews, selected))
@@ -213,12 +219,15 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         rule: RuleFilter = "",
     ) -> Response:
         with database() as db:
-            latest = _reviews(db, team_id)[-1]
-        return _legacy_worklist(team_id, latest, request) or _tab(team_id, None, "overview")
+            latest = _reviews(db, team_id, request)[-1]
+        return _legacy_worklist(team_id, latest, request) or _tab(
+            team_id, None, "overview", request
+        )
 
     @app.get("/teams/{team_id}/weeks")
     def pick_week(
         team_id: str,
+        request: Request,
         week: Annotated[str, Query(max_length=10)],
         tab: TabName = "overview",
     ) -> Response:
@@ -230,7 +239,10 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "No published review for that week."
             ) from None
-        return RedirectResponse(pages.tab_url(team_id, chosen, tab), status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(
+            pages.tab_url(team_id, chosen, tab, **from_request(request).params),
+            status.HTTP_303_SEE_OTHER,
+        )
 
     @app.get("/teams/{team_id}/weeks/{week}", response_class=HTMLResponse)
     def team_week(
@@ -244,13 +256,16 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         rule: RuleFilter = "",
     ) -> Response:
         with database() as db:
-            selected = _week(_reviews(db, team_id), week)
-        return _legacy_worklist(team_id, selected, request) or _tab(team_id, week, "overview")
+            selected = _week(_reviews(db, team_id, request), week)
+        return _legacy_worklist(team_id, selected, request) or _tab(
+            team_id, week, "overview", request
+        )
 
     @app.get("/teams/{team_id}/weeks/{week}/fix", response_class=HTMLResponse)
     def fix_list(
         team_id: str,
         week: str,
+        request: Request,
         show: Show = "attention",
         schema: SchemaFilter = "all",
         page: Page = 1,
@@ -261,7 +276,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state_filter = state if state in queries.QUALITY_STATES else None
         rule_filter = rule or None
         with database() as db:
-            reviews = _reviews(db, team_id)
+            reviews = _reviews(db, team_id, request)
             selected = _week(reviews, week)
             listing = queries.worklist(
                 db,
@@ -272,9 +287,15 @@ def build_portal(settings: PortalSettings) -> FastAPI:
                 rule=rule_filter,
                 page=page,
                 page_size=settings.page_size,
+                applications=selected.applications,
             )
             counts = queries.worklist_counts(
-                db, selected.run_id, schema=schema_filter, state=state_filter, rule=rule_filter
+                db,
+                selected.run_id,
+                schema=schema_filter,
+                state=state_filter,
+                rule=rule_filter,
+                applications=selected.applications,
             )
             decided = queries.latest_decisions(db, selected.run_id, listing.rows)
             summary = _summary(db, selected)
@@ -294,8 +315,8 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         )
 
     def _register(tab: str) -> None:
-        def one_tab(team_id: str, week: str) -> HTMLResponse:
-            return _tab(team_id, week, tab)
+        def one_tab(team_id: str, week: str, request: Request) -> HTMLResponse:
+            return _tab(team_id, week, tab, request)
 
         app.get(
             f"/teams/{{team_id}}/weeks/{{week}}/{tab}",
@@ -310,14 +331,20 @@ def build_portal(settings: PortalSettings) -> FastAPI:
     def alert(
         team_id: str,
         week: str,
+        request: Request,
         schema: Annotated[str, Query(pattern="^(v1|v2)$")],
         application: Annotated[str, Query(max_length=256)],
         key: Annotated[str, Query(max_length=512)],
     ) -> HTMLResponse:
         with database() as db:
-            reviews = _reviews(db, team_id)
+            reviews = _reviews(db, team_id, request)
             selected = _week(reviews, week)
-            detail = queries.alert_detail(db, selected.run_id, schema, application, key)
+            detail = (
+                queries.alert_detail(db, selected.run_id, schema, application, key)
+                if selected.applications.selected is None
+                or application in selected.applications.selected
+                else None
+            )
         if detail is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "That alert is not in this week's review."

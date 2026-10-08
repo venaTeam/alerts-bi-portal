@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any, Literal
 
 from alerts_bi_shared.db.connection import Database
+
+from .application_filter import ALL_APPLICATIONS, ApplicationFilter, predicate
 
 __all__ = [
     "AlertDetail",
@@ -68,6 +70,7 @@ class Review:
     phase: str
     readiness_pct: float | None
     totals: dict[str, SchemaTotals] = field(default_factory=dict)
+    applications: ApplicationFilter = field(default_factory=ApplicationFilter)
 
     @property
     def week(self) -> date:
@@ -140,7 +143,9 @@ def list_teams(db: Database) -> list[TeamSummary]:
     return [TeamSummary(review, weeks[review.run_id]) for review in _group_reviews(rows)]
 
 
-def team_reviews(db: Database, team_id: str) -> list[Review]:
+def team_reviews(
+    db: Database, team_id: str, applications: ApplicationFilter = ALL_APPLICATIONS
+) -> list[Review]:
     """Every published week of one team, oldest first."""
     rows = db.query(
         f"""
@@ -152,7 +157,40 @@ def team_reviews(db: Database, team_id: str) -> list[Review]:
         """,
         {"team_id": team_id},
     )
-    return _group_reviews(rows)
+    reviews = _group_reviews(rows)
+    options = db.query(
+        "SELECT DISTINCT a.application FROM portal_alerts AS a "
+        "JOIN portal_reviews AS r ON r.run_id = a.run_id "
+        "WHERE r.team_id = :team_id ORDER BY a.application ASC",
+        {"team_id": team_id},
+    )
+    applications = replace(applications, options=tuple(str(r["application"]) for r in options))
+    if not applications.active:
+        return [replace(r, applications=applications) for r in reviews]
+    clause, params = predicate(applications, "a.application")
+    scoped = db.query(
+        f"""
+        SELECT a.run_id, a.alert_schema, SUM(a.row_count) AS events,
+               COUNT(*) AS distinct_alerts,
+               SUM(CASE WHEN a.quality_state = 'rule_flagged' THEN 1 ELSE 0 END) AS rule_flagged,
+               SUM(CASE WHEN a.quality_state = 'llm_flagged' THEN 1 ELSE 0 END) AS llm_flagged,
+               SUM(CASE WHEN a.quality_state = 'needs_review' THEN 1 ELSE 0 END) AS needs_review,
+               SUM(CASE WHEN a.quality_state = 'assessed_good' THEN 1 ELSE 0 END) AS assessed_good,
+               SUM(CASE WHEN a.quality_state = 'unassessed' THEN 1 ELSE 0 END) AS unassessed,
+               SUM(CASE WHEN a.readiness_rule_ids <> '' THEN 1 ELSE 0 END) AS readiness_gaps,
+               SUM(CASE WHEN a.attention_rank < 4 THEN 1 ELSE 0 END) AS needs_attention
+        FROM portal_alerts AS a JOIN portal_reviews AS r ON r.run_id = a.run_id
+        WHERE r.team_id = :team_id AND {clause}
+        GROUP BY a.run_id, a.alert_schema ORDER BY a.run_id, a.alert_schema
+        """,
+        {"team_id": team_id, **params},
+    )
+    totals: dict[str, dict[str, SchemaTotals]] = {}
+    for row in scoped:
+        totals.setdefault(str(row["run_id"]), {})[str(row["alert_schema"])] = SchemaTotals(
+            **{name: int(row.get(name) or 0) for name in SchemaTotals.__dataclass_fields__}
+        )
+    return [replace(r, totals=totals.get(r.run_id, {}), applications=applications) for r in reviews]
 
 
 # ------------------------------------------------------------------ the work list
@@ -282,12 +320,20 @@ RULE_FILTER = re.compile(r"^R(10|[1-9])$")
 
 
 def _filters(
-    run_id: str, *, schema: str | None, state: str | None, rule: str | None
+    run_id: str,
+    *,
+    schema: str | None,
+    state: str | None,
+    rule: str | None,
+    applications: ApplicationFilter = ALL_APPLICATIONS,
 ) -> tuple[list[str], dict[str, Any]]:
     """The WHERE terms shared by a work-list page and its counts. Values are bound, never
     spliced: ``state`` and ``rule`` are also checked against their closed sets here."""
     where = ["run_id = :run_id"]
     params: dict[str, Any] = {"run_id": run_id}
+    app_clause, app_params = predicate(applications)
+    where.append(app_clause)
+    params.update(app_params)
     if schema in SCHEMAS:
         where.append("alert_schema = :schema")
         params["schema"] = schema
@@ -303,10 +349,18 @@ def _filters(
 
 
 def worklist_counts(
-    db: Database, run_id: str, *, schema: str | None, state: str | None, rule: str | None
+    db: Database,
+    run_id: str,
+    *,
+    schema: str | None,
+    state: str | None,
+    rule: str | None,
+    applications: ApplicationFilter = ALL_APPLICATIONS,
 ) -> dict[str, int]:
     """How many alerts need attention, and how many there are, under the other filters."""
-    where, params = _filters(run_id, schema=schema, state=state, rule=rule)
+    where, params = _filters(
+        run_id, schema=schema, state=state, rule=rule, applications=applications
+    )
     row = db.query_one(
         "SELECT COUNT(*) AS total, "
         "COALESCE(SUM(CASE WHEN attention_rank < 4 THEN 1 ELSE 0 END), 0) AS attention "
@@ -329,6 +383,7 @@ def worklist(
     page_size: int,
     state: str | None = None,
     rule: str | None = None,
+    applications: ApplicationFilter = ALL_APPLICATIONS,
 ) -> WorklistPage:
     """One page of a published week's alerts, paginated in SQL.
 
@@ -336,7 +391,9 @@ def worklist(
     then everything else; within a group by event count, then identity, so paging is stable.
     ``state`` narrows to one quality state and ``rule`` to alerts carrying one rule id.
     """
-    where, params = _filters(run_id, schema=schema, state=state, rule=rule)
+    where, params = _filters(
+        run_id, schema=schema, state=state, rule=rule, applications=applications
+    )
     if attention_only:
         where.append("attention_rank < 4")
     clause = " AND ".join(where)

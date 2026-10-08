@@ -1,5 +1,9 @@
 # What a run produces
 
+## Unified operator service amendment — 2026-10-08
+
+The accepted consolidation in `alerts_bi_design.md` supersedes the separate trigger/admin web topology described below. `alerts-bi-runs serve` now provides authenticated Teams → team run history → selected run Overview/Findings/Decisions/Activity, plus trigger/publish/withdraw/decide. It reuses the existing SQL/reporting and review operations; portal, weekly scheduling, exact 168-hour windows, migration ownership and output payloads remain unchanged. JSON triggers require proxy identity and `X-CSRF-Token` from `/csrf`. Browser writes require same-site form CSRF. Deploy one runs console behind the existing operator login proxy; see `unified-console-deployment.md`. The old trigger factory remains a compatibility harness only.
+
 **Last updated:** 2026-10-01
 
 A run writes exactly four files and no others: `scorecard.html`, `daily_metrics.csv`,

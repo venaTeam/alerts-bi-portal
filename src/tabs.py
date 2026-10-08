@@ -40,6 +40,7 @@ from alerts_bi_shared.ui.explain import (
 )
 from alerts_bi_shared.ui.slides import render_slides
 
+from .application_filter import ApplicationFilter
 from .pages import (
     PHASE_STEPS,
     SCHEMA_NAMES,
@@ -102,7 +103,63 @@ def _schema_chip(schema: str) -> str:
 
 
 def _alert_href(selected: Review, schema: str, application: str, key: str) -> str:
-    return alert_url(selected.team_id, selected.week, schema, application, key)
+    return alert_url(
+        selected.team_id, selected.week, schema, application, key, **selected.applications.params
+    )
+
+
+def _tab_url(selected: Review, tab: str, **query: Any) -> str:
+    return tab_url(selected.team_id, selected.week, tab, **selected.applications.params, **query)
+
+
+def _application_filter(selected: Review, active: str, query: Mapping[str, str]) -> str:
+    scope = selected.applications
+    action_url = tab_url(selected.team_id, selected.week, active)
+    options = sorted(set(scope.options) | set(scope.selected or ()))
+    checks = "".join(
+        '<label class="app-option"><input type="checkbox" name="apps" '
+        f'value="{h(app)}"{" checked" if scope.selected is None or app in scope.selected else ""}>'
+        f"<span>{h(app or '(empty application)')}</span></label>"
+        for app in options
+    )
+    hidden = "".join(
+        f'<input type="hidden" name="{h(key)}" value="{h(value)}">'
+        for key, value in query.items()
+        if value
+    )
+    label = "All applications" if scope.selected is None else f"{len(scope.selected)} selected"
+    current = _tab_url(selected, active, **query)
+    clear = tab_url(selected.team_id, selected.week, active, **query)
+    chips = []
+    for app in scope.selected or ():
+        remaining = ApplicationFilter(tuple(a for a in scope.selected or () if a != app))
+        url = tab_url(selected.team_id, selected.week, active, **remaining.params, **query)
+        chips.append(
+            f'<a class="app-chip" href="{h(url)}" aria-label="Remove {h(app or "empty application")}">'
+            f'{h(app or "(empty application)")} <span aria-hidden="true">&times;</span></a>'
+        )
+    selection = '<div class="app-chips">' + "".join(chips) + "</div>" if chips else ""
+    reset = f'<a class="app-reset" href="{h(clear)}">Show all</a>' if scope.active else ""
+    note = (
+        "No applications selected. Choose applications to display alerts."
+        if scope.selected == ()
+        else "Applies to all tabs and weeks."
+    )
+    return (
+        '<section class="app-filter" aria-label="Application filter">'
+        '<div class="app-filter-row"><span class="app-label">Applications</span>'
+        '<div class="app-menu"><button class="filter-toggle" id="application-filter-toggle" '
+        'type="button" popovertarget="application-filter-menu">' + h(label) + _CHEVRON + "</button>"
+        f'<form class="app-popover filter-popover" id="application-filter-menu" popover="auto" '
+        f'method="get" action="{h(action_url)}">'
+        '<input type="hidden" name="scope" value="selected">'
+        + hidden
+        + '<fieldset><legend>Choose applications</legend><div class="app-options">'
+        + (checks or '<p class="sub">No applications found.</p>')
+        + '</div></fieldset><div class="app-actions"><button class="button primary" type="submit">Apply</button>'
+        f'<a class="button" href="{h(current)}">Cancel</a></div></form></div>'
+        f'{selection}{reset}</div><p class="sub app-hint">{note}</p></section>'
+    )
 
 
 def _sample(alert: AlertRow, rule_id: str) -> dict[str, Any]:
@@ -168,15 +225,17 @@ def _alert_cell(href: str, message: str | None, application: str, component: str
 def _week_menu(reviews: Sequence[Review], selected: Review, tab: str) -> str:
     """The week menu: no script, so a list of links that keeps the open tab."""
     items = "".join(
-        f'<li><a href="{h(tab_url(r.team_id, r.week, tab))}"'
+        f'<li><a href="{h(_tab_url(r, tab))}"'
         f"{' aria-current="page"' if r.run_id == selected.run_id else ''}>"
         f"{h(format_week(r.window_start, r.window_end))}</a></li>"
         for r in reversed(reviews)
     )
     return (
-        '<div class="wk"><span class="sub">Week</span><details class="menu">'
-        f"<summary>{h(format_week(selected.window_start, selected.window_end))}{_CHEVRON}"
-        f'</summary><ul class="menu-list">{items}</ul></details></div>'
+        '<div class="wk"><span class="sub">Week</span>'
+        '<button class="filter-toggle" id="week-filter-toggle" type="button" '
+        'popovertarget="week-filter-menu">'
+        f"{h(format_week(selected.window_start, selected.window_end))}{_CHEVRON}</button>"
+        f'<ul class="menu-list filter-popover" id="week-filter-menu" popover="auto">{items}</ul></div>'
     )
 
 
@@ -188,14 +247,20 @@ def _tabs(selected: Review, active: str) -> str:
         current = ' aria-current="page"' if key == active else ""
         links.append(
             f'<a class="tab{" on" if key == active else ""}" '
-            f'href="{h(tab_url(selected.team_id, selected.week, key))}"{current}>'
+            f'href="{h(_tab_url(selected, key))}"{current}>'
             f"{label}{badge}</a>"
         )
     return f'<nav class="tabs" aria-label="This week">{"".join(links)}</nav>'
 
 
 def _page(
-    reviews: Sequence[Review], selected: Review, active: str, body: str, *, crumb: str = ""
+    reviews: Sequence[Review],
+    selected: Review,
+    active: str,
+    body: str,
+    *,
+    crumb: str = "",
+    filter_query: Mapping[str, str] | None = None,
 ) -> str:
     label = {key: text for key, text, _ in TABS}[active]
     crumbs = (
@@ -212,7 +277,21 @@ def _page(
         f"{selected.team_name} · {crumb or label} · "
         f"{format_week(selected.window_start, selected.window_end)}"
     )
-    return layout(title, crumbs + head + _tabs(selected, active) + body)
+    context = (
+        '<p class="sub scope-context">Showing selected applications. Published team phase, '
+        "team readiness percentage and review notes still describe the whole team.</p>"
+        if selected.applications.active
+        else ""
+    )
+    return layout(
+        title,
+        crumbs
+        + head
+        + _application_filter(selected, active, filter_query or {})
+        + _tabs(selected, active)
+        + context
+        + body,
+    )
 
 
 # ------------------------------------------------------------------ overview
@@ -240,14 +319,13 @@ def _schema_card(summary: TeamSummary, schema: str) -> str:
 
 
 def _finding_target(selected: Review, kind: str, rule_filter: str | None) -> tuple[str, str]:
-    team, week = selected.team_id, selected.week
     if kind in ("hidden", "unseen"):
-        return tab_url(team, week, "dashboards"), "Dashboards"
+        return _tab_url(selected, "dashboards"), "Dashboards"
     if kind == "readiness":
-        return tab_url(team, week, "migration"), "Migration"
+        return _tab_url(selected, "migration"), "Migration"
     if kind == "unassessed":
-        return tab_url(team, week, "fix", state="unassessed", show="all"), "Show alerts"
-    return tab_url(team, week, "fix", rule=rule_filter), "Show alerts"
+        return _tab_url(selected, "fix", state="unassessed", show="all"), "Show alerts"
+    return _tab_url(selected, "fix", rule=rule_filter), "Show alerts"
 
 
 def _findings(selected: Review, summary: TeamSummary) -> str:
@@ -278,7 +356,7 @@ def _phase_card(selected: Review, summary: TeamSummary) -> str:
         '<dl class="tot">'
         f"<dt>v1 alert rules left</dt><dd>{summary.estimate.rules_left:,}</dd>"
         f"<dt>v2 ready</dt><dd>{ready}</dd></dl>"
-        f'<a href="{h(tab_url(selected.team_id, selected.week, "migration"))}">Details</a>'
+        f'<a href="{h(_tab_url(selected, "migration"))}">Details</a>'
         "</section>"
     )
 
@@ -306,7 +384,7 @@ def overview_page(reviews: Sequence[Review], selected: Review, summary: TeamSumm
     )
     attention = selected.needs_attention
     cta = (
-        f'<a class="button primary" href="{h(tab_url(selected.team_id, selected.week, "fix"))}">'
+        f'<a class="button primary" href="{h(_tab_url(selected, "fix"))}">'
         f"Open fix list ({attention:,})</a>"
         if attention
         else ""
@@ -330,9 +408,8 @@ def _fix_href(
     selected: Review, *, show: str, schema: str, state: str, rule: str, page: int | None = None
 ) -> str:
     return (
-        tab_url(
-            selected.team_id,
-            selected.week,
+        _tab_url(
+            selected,
             "fix",
             show=None if show == "attention" else show,
             schema=None if schema == "all" else schema,
@@ -379,7 +456,7 @@ def _changes(selected: Review, summary: TeamSummary) -> str:
     )
 
     def row(rid: str, label: str, *, events: bool = True) -> str:
-        href = tab_url(selected.team_id, selected.week, "fix", rule=rid) + "#alerts"
+        href = _tab_url(selected, "fix", rule=rid) + "#alerts"
         return (
             f'<tr><td><span class="item">{h(label)}</span></td>'
             f"{_cell(grouped[rid].get('v1'), events=events)}"
@@ -405,7 +482,7 @@ def _changes(selected: Review, summary: TeamSummary) -> str:
             else '<td class="num r"><span class="sub">—</span></td>'
             for n in counts.values()
         )
-        href = tab_url(selected.team_id, selected.week, "fix", state=state) + "#alerts"
+        href = _tab_url(selected, "fix", state=state) + "#alerts"
         advisory.append(
             f'<tr><td><span class="item">{label}</span></td>{cells}'
             f'<td class="r"><a href="{h(href)}">Show</a></td></tr>'
@@ -441,7 +518,7 @@ def _banner(selected: Review, summary: TeamSummary, rule: str) -> str:
         for s in SCHEMAS
         if s in per and per[s].alerts
     )
-    back = tab_url(selected.team_id, selected.week, "fix")
+    back = _tab_url(selected, "fix")
     return (
         f'<p class="back"><a href="{h(back)}">← All changes</a></p>'
         '<section class="card pad banner"><div class="stack tight">'
@@ -558,7 +635,7 @@ def fix_page(
             f'<th scope="col" class="r">Events</th></tr></thead><tbody>{rows}</tbody></table></div>'
         )
     else:
-        clear = tab_url(selected.team_id, selected.week, "fix", show="all") + "#alerts"
+        clear = _tab_url(selected, "fix", show="all") + "#alerts"
         table = _quiet(f'Nothing matches. <a href="{h(clear)}">Clear filters</a>')
 
     first = (listing.page - 1) * listing.page_size + 1 if listing.total else 0
@@ -587,7 +664,13 @@ def fix_page(
         f'<div class="card-h"><h2>Alerts <span class="sub">{count:,}</span></h2></div>'
         f"{filters}{table}{pager}</section>"
     )
-    return _page(reviews, selected, "fix", body)
+    return _page(
+        reviews,
+        selected,
+        "fix",
+        body,
+        filter_query={"show": show, "schema": schema, "state": state, "rule": rule},
+    )
 
 
 # ------------------------------------------------------------------ volume
@@ -696,7 +779,7 @@ def dashboards_page(reviews: Sequence[Review], selected: Review, summary: TeamSu
             for s in SCHEMAS
         )
         more = (
-            f'<p class="sub pad-x"><a href="{h(tab_url(selected.team_id, selected.week, "fix", rule="R5"))}">'
+            f'<p class="sub pad-x"><a href="{h(_tab_url(selected, "fix", rule="R5"))}">'
             "All hidden alerts in the fix list</a></p>"
             if len(hidden) > TOP_LISTED
             else ""
@@ -709,7 +792,7 @@ def dashboards_page(reviews: Sequence[Review], selected: Review, summary: TeamSu
         # Clauses the parser could not check are invisible here, so claim only what was checked.
         hidden_body = _quiet("None found in the filters we could check.")
 
-    measured = [s for s in SCHEMAS if schemas[s].unseen is not None]
+    measured = [s for s in SCHEMAS if schemas[s].unseen_alerts is not None]
     if not measured:
         unseen_body = _quiet("Not measured this week.")
     else:
@@ -717,6 +800,8 @@ def dashboards_page(reviews: Sequence[Review], selected: Review, summary: TeamSu
             f"<dt>{SCHEMA_NAMES[s]}</dt><dd>"
             + (
                 "Not measured this week"
+                if schemas[s].unseen_alerts is None
+                else f"{plural(schemas[s].unseen_alerts or 0, 'alert')} · event count: application breakdown unavailable"
                 if schemas[s].unseen is None
                 else (
                     f"{plural(schemas[s].unseen or 0, 'event')} · "
@@ -818,7 +903,7 @@ def history_page(reviews: Sequence[Review], selected: Review) -> str:
                 value=int(getattr(review.totals.get(schema), metric, 0) or 0),
                 window_start=review.window_start,
                 window_end=review.window_end,
-                href=tab_url(review.team_id, review.week, "history"),
+                href=_tab_url(review, "history"),
                 title=f"Week of {format_week(review.window_start, review.window_end)}",
                 selected=review.run_id == selected.run_id,
             )
@@ -849,7 +934,7 @@ def history_page(reviews: Sequence[Review], selected: Review) -> str:
         + (
             '<td class="sub">Viewing</td>'
             if review.run_id == selected.run_id
-            else f'<td><a href="{h(tab_url(review.team_id, review.week, "overview"))}">Open</a></td>'
+            else f'<td><a href="{h(_tab_url(review, "overview"))}">Open</a></td>'
         )
         + "</tr>"
         for review in reversed(reviews)
@@ -1048,7 +1133,7 @@ def alert_page(reviews: Sequence[Review], selected: Review, detail: AlertDetail)
             + "</section>"
         )
     chips = _problems(alert)
-    back = tab_url(selected.team_id, selected.week, "fix") + "#alerts"
+    back = _tab_url(selected, "fix") + "#alerts"
     message = alert.message or "(no message)"
     body = (
         f'<p class="back"><a href="{h(back)}">← Fix list</a></p>'

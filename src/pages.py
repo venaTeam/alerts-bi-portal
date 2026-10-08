@@ -16,10 +16,10 @@ from datetime import date
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from alerts_bi_shared.ui.assets import STYLESHEET_PATH
 from alerts_bi_shared.ui.explain import format_date, format_week
 from alerts_bi_shared.ui.html import PHASE_STEPS, SCHEMA_NAMES, h, safe_link
 
+from .assets import STYLESHEET_PATH
 from .queries import Review, SchemaTotals, TeamSummary
 
 __all__ = [
@@ -84,13 +84,19 @@ def tab_url(team_id: str, week: date, tab: str, **query: Any) -> str:
     base = f"{team_url(team_id)}/weeks/{week.isoformat()}"
     path = _TAB_PATHS[tab]
     params = {key: value for key, value in query.items() if value not in (None, "")}
-    return base + (f"/{path}" if path else "") + ("?" + urlencode(params) if params else "")
+    return (
+        base
+        + (f"/{path}" if path else "")
+        + ("?" + urlencode(params, doseq=True) if params else "")
+    )
 
 
-def alert_url(team_id: str, week: date, schema: str, application: str, key: str) -> str:
+def alert_url(
+    team_id: str, week: date, schema: str, application: str, key: str, **query: Any
+) -> str:
     """One alert of a published week, opened from the Fix list."""
     return f"{team_url(team_id)}/weeks/{week.isoformat()}/alert?" + urlencode(
-        {"schema": schema, "application": application, "key": key}
+        {"schema": schema, "application": application, "key": key, **query}, doseq=True
     )
 
 

@@ -54,7 +54,14 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.1 wheel. Standalone imports and schema readiness remain intact.
+`alerts-bi-shared` 0.1.2 wheel. Standalone imports and schema readiness remain intact.
+
+The application selector above the team tabs filters alerts and weekly summaries across
+every tab. Choose several applications and Apply, remove individual chips, or Show all.
+Selections persist in the URL through weeks, alert details and Fix list pagination.
+An empty selection shows no alerts. Daily charts and event shares that cannot be split by
+application are labeled unavailable; published phase, readiness percentage and notes remain
+explicitly whole-team context. The feature remains GET-only and requires no schema migration.
 
 
 Application code lives directly in `src/`. Local tests import `src`, while setuptools
