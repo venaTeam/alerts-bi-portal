@@ -26,7 +26,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alerts-bi-shared", path = "vendor/alerts_bi_shared-0.1.0-py3-none-any.whl" },
+    { name = "alerts-bi-shared", path = "vendor/alerts_bi_shared-0.1.1-py3-none-any.whl" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "uvicorn", specifier = ">=0.32,<1" },
 ]
@@ -41,14 +41,14 @@ dev = [
 
 [[package]]
 name = "alerts-bi-shared"
-version = "0.1.0"
-source = { path = "vendor/alerts_bi_shared-0.1.0-py3-none-any.whl" }
+version = "0.1.1"
+source = { path = "vendor/alerts_bi_shared-0.1.1-py3-none-any.whl" }
 dependencies = [
     { name = "pymssql" },
     { name = "sqlalchemy" },
 ]
 wheels = [
-    { filename = "alerts_bi_shared-0.1.0-py3-none-any.whl", hash = "sha256:84eec7615128319ba6d4c5f3a2b4cc878ecbb0bcf3ccd2a2a893d1ae0dc8bbff" },
+    { filename = "alerts_bi_shared-0.1.1-py3-none-any.whl", hash = "sha256:4b09864c89ee920941b6be6e61799f1596251a5a6a3a2ee93ff7d13eb4c7835b" },
 ]
 
 [package.metadata]

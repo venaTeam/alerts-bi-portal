@@ -4,6 +4,10 @@ The independent GET-only reader app renders published weeks from the six `portal
 SQL Server views. It keeps the existing network allowlist, script-free pages, publication
 isolation and weekly totals. It cannot execute runs, publish reviews or record decisions.
 
+Each team week has seven tabs: Overview, Fix list, Volume, Dashboards, Migration,
+History and Slides. Problems have plain-language names. The week menu keeps the selected
+tab, and older work-list links redirect to the Fix list with their filters intact.
+
 Python 3.12+ and `uv` are required. From this repository:
 
 ```powershell
@@ -48,6 +52,9 @@ from this clone alone. Update the shared wheel with its source release and contr
 never edit a released wheel in place.
 
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
+The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
+the initial extraction used code from before that update. Shared presentation is supplied by the vendored
+`alerts-bi-shared` 0.1.1 wheel. Standalone imports and schema readiness remain intact.
 
 
 Application code lives directly in `src/`. Local tests import `src`, while setuptools

@@ -27,8 +27,8 @@ from alerts_bi_shared.insights import (
     WeekRules,
 )
 from alerts_bi_shared.ui.explain import r6_next_step, rule_explanation
-from alerts_bi_shared.ui.html import h
 from alerts_bi_shared.ui.summary_view import _share, format_projected_week, render_summary_sections
+from src.pages import h
 
 END = datetime(2026, 9, 28)
 START = END - timedelta(hours=168)
@@ -210,7 +210,7 @@ def build_summary(
         else (
             KeyFinding(
                 "largest",
-                "R6 is your largest finding",
+                "Biggest problem: firing pattern",
                 "864 v1 events from 1 alert.",
                 None,
                 "R6",
@@ -463,7 +463,7 @@ def test_rule_links_come_from_the_callback() -> None:
 def test_a_key_finding_on_a_rule_offers_its_next_step_and_its_alerts() -> None:
     html = render()
     findings = html[html.index("Key findings") : html.index("Noisy alerts by application")]
-    assert "R6 is your largest finding" in findings
+    assert "Biggest problem: firing pattern" in findings
     assert 'href="/wl?rule=R6"' in findings
     assert "Widen a panel" in findings
 
