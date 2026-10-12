@@ -13,7 +13,7 @@ Python 3.12+ and `uv` are required. From this repository:
 ```powershell
 uv sync --frozen
 Copy-Item .env.example .env
-# Set SQL_* to the same database and login used by alerts-bi-runs.
+# Set SQL_* to the same database and login used by alerts-bi-admin.
 uv run --frozen alerts-bi-portal
 ```
 
@@ -28,7 +28,7 @@ It returns 503 if a view or required column is unavailable, without reading aler
 querying database metadata or applying migrations. The packaged column contract matches
 the pinned design snapshot; deployment must still use the release's supported migration set.
 
-The database and migrations belong to `venaTeam/alerts-bi-runs`; apply its migrations
+The database and migrations belong to `venaTeam/alerts-bi-admin`; apply its migrations
 before starting the portal. This repository never migrates or seeds the database.
 There is no runtime dependency on a sibling checkout. The immutable shared wheel in
 `vendor/` and the committed `uv.lock` make an isolated clone installable.
@@ -68,3 +68,5 @@ Application code lives directly in `src/`. Local tests import `src`, while setup
 maps that directory to the service's distinct installed Python package. The console
 command and Docker listener are unchanged. `uv sync --frozen` installs the editable
 mapping; `uv build` produces the independently installable wheel and source archive.
+
+Shared-library source and migration/mock tooling are maintained in alerts-bi-admin. Portal remains independently installable with its pinned shared wheel and requires no admin source, engine, operations library or registry. See docs/upstream/runs-retirement.md for the coordinated source retirement.
