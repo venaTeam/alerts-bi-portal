@@ -8,13 +8,15 @@ Each team week has seven tabs: Overview, Fix list, Volume, Dashboards, Migration
 History and Slides. Problems have plain-language names. The week menu keeps the selected
 tab, and older work-list links redirect to the Fix list with their filters intact.
 
-Python 3.12+ and `uv` are required. From this repository:
+Python 3.12+ and Poetry 2.3.1 are required. From this repository:
 
 ```powershell
-uv sync --frozen
+poetry sync --no-root
+poetry run python -m ensurepip --upgrade
+poetry run python -m pip install --no-deps -e .
 Copy-Item .env.example .env
 # Set SQL_* to the same database and login used by alerts-bi-admin.
-uv run --frozen alerts-bi-portal
+poetry run alerts-bi-portal
 ```
 
 Open `http://127.0.0.1:8100`. `--host` and `--port` override the listener settings.
@@ -31,14 +33,14 @@ the pinned design snapshot; deployment must still use the release's supported mi
 The database and migrations belong to `venaTeam/alerts-bi-admin`; apply its migrations
 before starting the portal. This repository never migrates or seeds the database.
 There is no runtime dependency on a sibling checkout. The immutable shared wheel in
-`vendor/` and the committed `uv.lock` make an isolated clone installable.
+`vendor/` and the committed `poetry.lock` make an isolated clone installable.
 
 ```powershell
-uv run --frozen ruff format --check .
-uv run --frozen ruff check .
-uv run --frozen mypy
-uv run --frozen pytest -q
-uv build
+poetry run ruff format --check .
+poetry run ruff check .
+poetry run mypy
+poetry run pytest -q
+poetry build
 docker build -t alerts-bi-portal:local .
 ```
 
@@ -54,7 +56,7 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.2 wheel. Standalone imports and schema readiness remain intact.
+`alerts-bi-shared` 0.1.3 wheel. Standalone imports and schema readiness remain intact.
 
 The application selector above the team tabs filters alerts and weekly summaries across
 every tab. Choose several applications and Apply, remove individual chips, or Show all.
@@ -66,7 +68,14 @@ explicitly whole-team context. The feature remains GET-only and requires no sche
 
 Application code lives directly in `src/`. Local tests import `src`, while setuptools
 maps that directory to the service's distinct installed Python package. The console
-command and Docker listener are unchanged. `uv sync --frozen` installs the editable
-mapping; `uv build` produces the independently installable wheel and source archive.
+command and Docker listener are unchanged. `poetry sync --no-root` installs the
+locked dependencies; `poetry run python -m ensurepip --upgrade` bootstraps pip
+in existing uv-created environments before `poetry run python -m pip install
+--no-deps -e .` installs the editable setuptools mapping. Keep these three setup
+commands together: Poetry's own editable installer does not map `src` to the service
+namespace. `poetry build` uses the declared setuptools backend to produce the
+independently installable wheel and source archive. Docker installs that wheel.
+Run `poetry check --lock` to validate the committed lockfile. `docs/upstream/`
+is a pinned historical snapshot; current service commands are listed here.
 
 Shared-library source and migration/mock tooling are maintained in alerts-bi-admin. Portal remains independently installable with its pinned shared wheel and requires no admin source, engine, operations library or registry. See docs/upstream/runs-retirement.md for the coordinated source retirement.
