@@ -1,16 +1,39 @@
 # Alerts BI — Design Document
 
+## Complete runs retirement — 2026-10-12
+
+The product owner requested complete source and service consolidation into `alerts-bi-admin`.
+Admin now owns the analysis engine, persistence, sole migration chain, weekly jobs, registry,
+mock tooling, acceptance oracle, and the shared/operations library sources. The engine is
+maintained at `src/engine`, installed as `alerts_bi_admin.engine`. The existing UI stays at
+`src/`; all operational commands use `alerts-bi-admin`. There is no runs distribution,
+vendored runtime, image, checkout or separate listener in the supported application topology.
+Portal remains a standalone read-only consumer of `alerts-bi-shared`. Design retains canonical
+requirements and contracts. This decision supersedes earlier ownership and packaging boundaries;
+earlier consolidation/separation sections are historical where they conflict with this amendment.
+
+Applied SQL and revision modules 001–008, schema head `008_measurement_basis`, prompt and
+analysis versions, deterministic identities, registry content and the hand-authored oracle
+remain unchanged. The migration-only `src.db.ledger` bridge is retained. Shared/operations
+0.1.3 records the producer relocation while preserving their public namespaces and behavior.
+Admin uses its local uv workspace packages; portal pins an immutable shared wheel. The legacy
+API factory is a wire-contract test harness only, with no standalone server entry point.
+
+This change prepares source, artifacts and deployment examples. PR delivery does not deploy,
+stop a service, merge a PR or archive a repository. Follow [the retirement cutover](runs-retirement.md)
+to transfer the migration job and exactly one weekly scheduler before retiring old infrastructure.
+
 ## Accepted consolidation — 2026-10-08
 
-The user approved implementing the team-centered unified operator mock. This amendment supersedes the separate unauthenticated trigger and admin web-service boundaries in sections 7.9, 7.12 and 7.16 and the original repository-separation decision. `alerts-bi-runs serve` now owns one authenticated operator console and its run API. The runs image contains the admin review implementation; it imports shared and operations libraries, never the sibling admin application. The legacy admin repository is retained for rollback and command-line tooling. Portal remains a separate read-only service; weekly jobs remain in the runs image.
+The user approved implementing the team-centered unified operator mock and, on 2026-10-08, explicitly requested delivery in `alerts-bi-admin`. This amendment supersedes the separate unauthenticated trigger and admin web-service boundaries in sections 7.9, 7.12 and 7.16, the original repository-separation decision, and the earlier placement of the console in the runs repository. `alerts-bi-admin serve` owns the authenticated operator console and its run API. Its editable UI source lives in the admin repository. A pinned, immutable `alerts-bi-runs-runtime` wheel supplies existing analysis/API/config adapters in-process; no sibling checkout or separate trigger listener is required. The engine code is exported from a recorded runs Git revision without scoring, prompt or migration changes. Admin may import these packaged adapters, superseding its earlier no-runs-import boundary. The runtime and full runs distributions share a Python namespace and must use separate environments. Runs retains engine, migration, registry and weekly-job ownership. Portal remains a separate read-only service.
 
-Navigation starts at Teams. Opening a team shows its paginated run history and a selected run with Overview, Findings, Decisions and Activity tabs. Overview retains the current summary, independent v1/v2 metrics, complete-day charts, filtered SQL work list, panel SQL and four approved exports. Findings exposes stored evidence and representative data to authenticated operators. Decisions shows the selected run's append-only audit history. Activity shows publication history and the team's schedule log. Analysis completion and publication state are separate.
+The approved mock has three workspace navigation items: Teams, Schedule and Decisions; there is no separate Runs item. Opening a team shows its run history above a selected run with Overview, Findings, Decisions and Activity tabs. Overview uses compact, separate v1/v2 cards and a review-focus panel. Run details and versions expand to retain the detailed summary, complete-day charts, filtered SQL work list, panel SQL and four approved exports. Findings uses a selectable list beside one evidence and human-decision panel. The global Decisions page spans teams and runs; its links open the exact finding, including across pages. The run Decisions tab stays scoped to that run. Schedule shows real weekly review outcomes with links to team runs. Activity shows run/publication history and the team's schedule log. New run, Publish review, Withdraw review and Record decision use accessible modal dialogs. Analysis completion and publication state are separate. This visual clarification, accepted 2026-10-08, corrects the implementation to match the user's mock rather than replacing its navigation or exposing all features on one page.
 
 New run is scoped to the selected registered team, takes a UTC window end and live/fake/off model mode, and invokes the existing synchronous execution/persistence/reporting path under the existing process gate. Its window is exactly the preceding 168 hours. UI and JSON triggers share the gate. Manual completion does not publish. Existing publish/replace/gap, withdraw-with-reason and published-run decision rules remain authoritative. Actions return to the selected team/run; an explicit cross-team run selection is refused. No migration, scoring, prompt, deterministic identifier or output-content changes are authorized by this consolidation.
 
-All console and API routes require the proxy identity (or an explicitly supplied local `--dev-user`). The listener refuses non-loopback addresses and requires `ADMIN_SECRET` of at least 32 characters. Browser writes use same-site CSRF forms; JSON `POST /runs` requires `X-CSRF-Token` obtained from authenticated `GET /csrf`. No unauthenticated trigger Service remains in the deployment topology. Existing request/response payloads and export routes are retained behind authentication; the old API factory is a compatibility/test harness, not a deployment entry point. Default port is 8000; `ADMIN_*` configuration is retained with API bind/registry/output fallbacks. One replica and one worker preserve the existing process-local gate guarantee.
+All console and API routes require the proxy identity (or an explicitly supplied local `--dev-user`). The listener refuses non-loopback addresses and requires `ADMIN_SECRET` of at least 32 characters. Browser writes use same-site CSRF forms; JSON `POST /runs` requires `X-CSRF-Token` obtained from authenticated `GET /csrf`. No unauthenticated trigger Service remains in the deployment topology. Existing request/response payloads and export routes are retained behind authentication; the old API factory is a compatibility/test harness, not a deployment entry point. Default port is 8200; `ADMIN_*` configuration is retained, with `ADMIN_OUT_DIR` for writable execution output and existing `SQL_*`, `ES_*` and `LLM_*` runtime settings. One replica and one worker preserve the existing process-local gate guarantee.
 
-The implementation remains server-rendered with a content-addressed stylesheet and a small same-origin script for trigger feedback. Empty teams, failed runs, refusal messages, keyboard-accessible forms and narrow viewports are required states. Infrastructure rollout is a separate authorized action; see `unified-console-deployment.md`.
+The implementation remains server-rendered with a content-addressed stylesheet and a small same-origin script for accessible dialogs, team selection, UTC-window previews and trigger feedback. Empty teams, failed runs, refusal messages, keyboard-accessible forms and narrow viewports are required states. Infrastructure rollout is a separate authorized action; see `unified-console-deployment.md`.
 
 **Status:** MVP design settled and implemented; implementation language changed to Python (section 7.7); read-only review portal added (section 7.10); automatic weekly reviews (section 7.11); operator admin app (section 7.12); LLM review upgrade and evaluation tooling (section 7.13); team summary, R6 and `unseen` (section 7.14); the portal's team week split into tabs (section 7.10, amended 2026-10-04)
 **Last updated:** 2026-10-08
@@ -1045,7 +1068,7 @@ as a small-input reference for parity testing. `scripts/benchmark_streaming.py`
 reuses the existing mock generator to measure repeated-event scaling without ES,
 SQL or model calls; it does not create another fixture system or acceptance oracle.
 
-### 7.16 Repository separation
+### 7.16 Historical repository separation (superseded by 2026-10-12 retirement)
 
 **Approved for implementation 2026-10-06 by the product owner.** Four repositories in
 the existing `venaTeam` GitHub organization live as siblings beneath a local, non-Git
