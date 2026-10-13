@@ -28,6 +28,7 @@ from alerts_bi_shared.catalogs import (
 from alerts_bi_shared.insights import AlertRow as SummaryAlert
 from alerts_bi_shared.insights import RuleTotal, TeamSummary
 from alerts_bi_shared.insights.labels import STATE_LABELS, action, fix, problem, why
+from alerts_bi_shared.insights.stored import fact, patterns
 from alerts_bi_shared.ui.charts import ChartPoint, Segment, line_chart, stacked_bar
 from alerts_bi_shared.ui.explain import (
     decision_question,
@@ -365,7 +366,12 @@ def _phase_card(selected: Review, summary: TeamSummary) -> str:
         for key, _ in PHASE_STEPS
     )
     v2 = [a for a in summary.inputs.alerts if a.schema == "v2"]
-    ready = f"{sum(_is_ready(a) for a in v2):,} of {len(v2):,}" if v2 else "—"
+    n = summary.inputs.schemas["v2"].distinct_alerts
+    ready = (
+        f"{fact(summary.inputs, 'v2', 'ready', sum(_is_ready(a) for a in v2)):,} of {n:,}"
+        if n
+        else "—"
+    )
     none = '<p class="sub">No alerts this week.</p>' if selected.phase == "no_data" else ""
     return (
         '<section class="card pad stack"><div class="eyebrow">Phase</div>'
@@ -422,7 +428,14 @@ def overview_page(reviews: Sequence[Review], selected: Review, summary: TeamSumm
 
 
 def _fix_href(
-    selected: Review, *, show: str, schema: str, state: str, rule: str, page: int | None = None
+    selected: Review,
+    *,
+    show: str,
+    schema: str,
+    state: str,
+    rule: str,
+    page: int | None = None,
+    cursor: str | None = None,
 ) -> str:
     return (
         _tab_url(
@@ -433,6 +446,7 @@ def _fix_href(
             state=None if state == "all" else state,
             rule=rule or None,
             page=page,
+            cursor=cursor,
         )
         + "#alerts"
     )
@@ -453,9 +467,7 @@ def _cell(total: RuleTotal | None, *, events: bool = True) -> str:
 
 
 def _r6_pattern(summary: TeamSummary) -> str | None:
-    return dominant_r6_pattern(
-        (a.fire_pattern, a.row_count) for a in summary.inputs.alerts if "R6" in a.core_rule_ids
-    )
+    return dominant_r6_pattern((p, pair[1]) for p, pair in patterns(summary.inputs).items())
 
 
 def _changes(selected: Review, summary: TeamSummary) -> str:
@@ -471,6 +483,8 @@ def _changes(selected: Review, summary: TeamSummary) -> str:
         for a in summary.inputs.alerts
         if a.schema == "v2" and _critical(a.severity) and "R9" in a.readiness_rule_ids
     )
+
+    critical = fact(summary.inputs, "v2", "critical", critical)
 
     def row(rid: str, label: str, *, events: bool = True) -> str:
         href = _tab_url(selected, "fix", rule=rid) + "#alerts"
@@ -661,7 +675,7 @@ def fix_page(
     def page_link(target: int, text: str, enabled: bool) -> str:
         if not enabled:
             return f'<span class="button" aria-disabled="true">{text}</span>'
-        return f'<a class="button" href="{h(href(page=target))}">{text}</a>'
+        return f'<a class="button" href="{h(href(page=target, cursor=listing.next_cursor if target > listing.page else listing.previous_cursor))}">{text}</a>'
 
     pager = (
         f'<div class="pager"><span>{first}&ndash;{last} of {listing.total:,}</span>'
@@ -704,11 +718,16 @@ def _pattern_line(alerts: Iterable[SummaryAlert]) -> str:
 
 
 def volume_page(reviews: Sequence[Review], selected: Review, summary: TeamSummary) -> str:
-    any_pattern = any(a.fire_pattern for a in summary.inputs.alerts)
+    any_pattern = bool(patterns(summary.inputs))
     columns = 4 if any_pattern else 3
     rows = []
     for schema in SCHEMAS:
-        line = _pattern_line(a for a in summary.inputs.alerts if a.schema == schema)
+        counts = patterns(summary.inputs, schema)
+        line = " · ".join(
+            f"{counts[p][0]:,} {p}"
+            for p in ("stuck", "spamming", "flapping")
+            if counts.get(p, [0])[0]
+        )
         extra = f' <span class="sub">· {h(line)}</span>' if line else ""
         rows.append(
             f'<tr class="grp"><td colspan="{columns}">{SCHEMA_NAMES[schema]}{extra}</td></tr>'
@@ -798,7 +817,7 @@ def dashboards_page(reviews: Sequence[Review], selected: Review, summary: TeamSu
         more = (
             f'<p class="sub pad-x"><a href="{h(_tab_url(selected, "fix", rule="R5"))}">'
             "All hidden alerts in the fix list</a></p>"
-            if len(hidden) > TOP_LISTED
+            if sum(r.alerts for r in r5.values()) > TOP_LISTED
             else ""
         )
         hidden_body = (
@@ -861,8 +880,8 @@ def migration_page(reviews: Sequence[Review], selected: Review, summary: TeamSum
         left = (
             f'<span class="big">{summary.estimate.rules_left:,}</span>'
             '<span class="sub">alert rules</span><dl class="tot">'
-            f"<dt>Applications</dt><dd>{len({a.application for a in v1}):,}</dd>"
-            f"<dt>Alerts</dt><dd>{len(v1):,}</dd></dl>"
+            f"<dt>Applications</dt><dd>{fact(summary.inputs, 'v1', 'applications', len({a.application for a in v1})):,}</dd>"
+            f"<dt>Alerts</dt><dd>{summary.inputs.schemas['v1'].distinct_alerts:,}</dd></dl>"
         )
     else:
         left = '<p class="sub">No v1 alert fired this week.</p>'
@@ -871,11 +890,11 @@ def migration_page(reviews: Sequence[Review], selected: Review, summary: TeamSum
     if v2:
         gaps = "".join(
             f"<dt>{h(problem(rid))}</dt>"
-            f"<dd>{sum(1 for a in v2 if rid in a.readiness_rule_ids):,}</dd>"
+            f"<dd>{sum(r.alerts for r in summary.inputs.rules if r.schema == 'v2' and r.rule_id == rid):,}</dd>"
             for rid in ("R8", "R9", "R10")
         )
         ready = (
-            f'<span class="big">{sum(_is_ready(a) for a in v2):,} of {len(v2):,}</span>'
+            f'<span class="big">{fact(summary.inputs, "v2", "ready", sum(_is_ready(a) for a in v2)):,} of {summary.inputs.schemas["v2"].distinct_alerts:,}</span>'
             f'<span class="sub">alerts</span><dl class="tot">{gaps}</dl>'
         )
     else:
@@ -887,14 +906,16 @@ def migration_page(reviews: Sequence[Review], selected: Review, summary: TeamSum
             "<tr>"
             f"{_alert_cell(_alert_href(selected, a.schema, a.application, a.key_field), a.message, a.application, a.component)}"
             f'<td class="num r">{a.row_count:,}</td></tr>'
-            for a in sorted(critical, key=lambda a: (-a.row_count, a.application, a.key_field))
+            for a in sorted(critical, key=lambda a: (-a.row_count, a.application, a.key_field))[
+                :TOP_LISTED
+            ]
         )
         blocking = (
             '<section class="card"><div class="card-h"><h2>Critical, no runbook</h2>'
             '<span class="sub">Blocks phase 2</span></div><div class="table-wrap">'
             '<table class="list"><thead><tr><th scope="col">Alert</th>'
             f'<th scope="col" class="r">Events</th></tr></thead><tbody>{rows}</tbody></table>'
-            "</div></section>"
+            f'</div><p class="pad-x">{fact(summary.inputs, "v2", "critical", len(critical)):,} critical alerts without a runbook. <a href="{h(_tab_url(selected, "fix", rule="R9"))}">Show runbook gaps</a></p></section>'
         )
 
     body = (

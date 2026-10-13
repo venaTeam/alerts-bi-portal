@@ -1,5 +1,9 @@
 # What a run produces
 
+## Bounded read paths — accepted 2026-10-13
+
+The [performance contract](read-path-performance.md) governs compact stored summaries, bounded UI reads, pooled web connections, seek navigation and completed-analysis reuse. It supersedes earlier descriptions of full alert loads and unavailable application daily metrics for new runs. Historical missing measurements remain unavailable; CSV definitions, publication isolation, serialized execution and retention policy are unchanged.
+
 ## Source ownership amendment — 2026-10-12
 
 Admin owns execution, migrations, weekly jobs, registry and library builds under `alerts_bi_admin.engine`; commands use `alerts-bi-admin`. The previous runs ownership and runtime-wheel references below are historical. Product behavior, wire payloads, SQL contracts and outputs are unchanged. See [retirement and cutover](runs-retirement.md).
@@ -8,11 +12,12 @@ Admin owns execution, migrations, weekly jobs, registry and library builds under
 
 The accepted consolidation in `alerts_bi_design.md` supersedes the separate trigger/admin web topology described below. `alerts-bi-admin serve` now provides authenticated Teams → team run history → selected run Overview/Findings/Decisions/Activity, alongside global Schedule and Decisions pages. The approved compact overview, split findings panel and action dialogs retain trigger/publish/withdraw/decide; detailed charts, SQL, filters and exports expand under run details. It reuses the existing SQL/reporting and review operations; portal, weekly scheduling, exact 168-hour windows, migration ownership and output payloads remain unchanged. JSON triggers require proxy identity and `X-CSRF-Token` from `/csrf`. Browser writes require same-site form CSRF. The admin repository owns UI source and vendors a pinned execution-runtime wheel; no sibling checkout or separate trigger listener is required. Deploy one admin console behind the existing operator login proxy; see `unified-console-deployment.md`. The old trigger factory remains a compatibility harness only.
 
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-13
 
-A run writes exactly four files and no others: `scorecard.html`, `daily_metrics.csv`,
-`rule_counts.csv`, `alert_worklist.csv`. This document says what is in each of them, column
-by column and section by section.
+Admin writes three CSV files: `daily_metrics.csv`, `rule_counts.csv`, `alert_worklist.csv`.
+Standalone HTML scorecards are removed entirely (accepted 2026-10-13;
+[async run contract](async-runs.md)). Completed results appear in the authenticated admin
+workspace. This document defines the three CSV exports and their HTTP contract.
 
 It is a reference, not a rationale. *Why* each metric is defined the way it is lives in
 [`alerts_bi_design.md`](alerts_bi_design.md); this file says what you are looking at. Where
@@ -73,41 +78,12 @@ V2 readiness gaps (R8–R10) are **orthogonal** to these five: an identity can b
 
 ---
 
-## 3. `scorecard.html`
+## 3. Viewing a completed run
 
-Self-contained: no scripts, no external stylesheets, no remote images. It opens from disk
-and renders identically on a machine with no network.
-
-Sections, in render order:
-
-| Section | Answers |
-|---|---|
-| **Run metadata** | Is this result reproducible? Team, `run_at`, the exact window bounds, registry version and SHA-256, ruleset / prompt / model versions, run id |
-| **Migration phase** | Where is this team in the migration? The derived phase and phase-2 readiness percentage |
-| **Volume** | How much is this team sending? v1 and v2 separately, rows and distinct-per-day, alerts per hour |
-| **Data-quality diagnostics** | Are the identity counts trustworthy? `node_name_ratio` and `key_inflation_ratio` with their operands |
-| **Quality** | How much of it is bad? The five states, plus phase-2 gaps |
-| **Dashboard visibility** | What does the team hide from itself? Suppressed rows, unmeasured suppression leaves, **unseen** rows (owned rows no supplied panel shows), and the supplied panels |
-| **Rule and principle breakdown** | Which rules and principles fired, and how often |
-| **Daily breakdown** | The per-day table — one row per schema per UTC date, the same figures as `daily_metrics.csv` |
-| **Work list** | The actual list of things to fix, one row per identity |
-| **LLM batch attempts** | What was asked of the model, and whether it answered |
-| **Limitations** | What this scorecard deliberately does not say |
-
-### Reading the metadata
-
-Every field exists so a number can be traced back. The registry SHA-256 covers the
-**complete** registry file, including teams this run did not select, so "which ownership
-mapping produced this?" has an exact answer even after the registry is edited. `Model
-version` reads `not used` when the model was off — and the Quality section then says plainly
-that nothing was examined, rather than showing a reassuring zero.
-
-### Phase and readiness
-
-The phase is **derived** from identity presence and readiness, never self-reported.
-Phase-2 readiness is completion-ready v2 identities over all v2 identities, and renders as
-`—` when the team has no v2 identities: zero percent would assert a failure where there is
-simply nothing to measure.
+Open the selected run in `/teams/{team_id}?run_id={run_id}`. Overview, findings, decisions,
+activity and run details remain available. Run/version metadata, derived phase and readiness
+are read from committed SQL. A team with no v2 identities has null readiness, displayed as
+`—`. Standalone HTML reports, files and links are removed; only the three CSVs are exported.
 
 ---
 
@@ -219,14 +195,24 @@ and JSON writes require a same-site CSRF token from authenticated `GET /csrf`.
 `POST /runs` takes a JSON body:
 
 ```json
-{ "team": "checkout-api", "run_at": "2026-08-25T18:00:00Z", "llm": "fake" }
+{ "team": "checkout-api", "run_at": "2026-08-24T00:00:00Z", "llm": "fake" }
 ```
 
-`team` is required and never defaults. `run_at` defaults to now — pin it only against the
-fixed-clock mock. `llm` is `live` (the default), `fake` or `off`, mirroring the CLI's
+`team` is required and never defaults. **Amended 2026-10-13:** `run_at` is a Monday
+00:00 UTC boundary and defaults to the latest completed Monday; other instants are refused.
+The admin form chooses the Monday date only, covering exactly the preceding Monday week.
+The summary below illustrates the historical fixed-clock mock's output shape; its numbers
+are not expected totals for the newly selected Monday window.
+`llm` is `live` (the default), `fake` or `off`, mirroring the CLI's
 default, `--fake-llm` and `--no-llm`.
 
-The response is the **scorecard HTML**, or with `Accept: application/json` a summary:
+Admin's `POST /runs/{run_id}/delete` requires same-site actor-bound form CSRF and
+`confirm_delete=1`. It permanently removes that run and its publications/decisions/results;
+all its GET report and download routes then return 404. The redirect selects the team
+without the deleted run id. SQL views and CSV columns are unchanged. See design section
+7.12 for generated file cleanup, retained shared caches and scheduler recreation.
+
+The response is always a JSON summary, including for `Accept: text/html`:
 
 ```json
 {
@@ -236,8 +222,11 @@ The response is the **scorecard HTML**, or with `Accept: application/json` a sum
   "v2": {"rows": 10, "distinct": 6},
   "llm_assessed": true, "llm_eligible": 9,
   "out_dir": "out/d99db480d498edbd",
-  "scorecard": "/runs/<run_id>",
-  "files": {"scorecard.html": "/runs/<run_id>/scorecard.html", "...": "..."}
+  "files": {
+    "daily_metrics.csv": "/runs/<run_id>/daily_metrics.csv",
+    "rule_counts.csv": "/runs/<run_id>/rule_counts.csv",
+    "alert_worklist.csv": "/runs/<run_id>/alert_worklist.csv"
+  }
 }
 ```
 
@@ -248,14 +237,21 @@ Every response carries `X-Alerts-BI-Run-Id`, and a run also carries `X-Alerts-BI
 |---|---|
 | `GET /healthz` | `{ok, version, checks}` with Elasticsearch and SQL Server reported separately; `503` if either is down |
 | `GET /teams` | The registry's teams: `team_id`, `display_name`, `v1_operators`, `v2_operator`, panel count |
-| `GET /runs/<run_id>` | That run's scorecard, re-rendered from SQL |
-| `GET /runs/latest?team=<id>` | The team's most recent completed run |
-| `GET /runs/<run_id>/<file>` | One of the four approved outputs. Nothing else is addressable |
+| `GET /runs/<run_id>/<file>` | One of the three CSV exports, rendered from SQL |
+| `GET /runs/latest/<file>?team=<id>` | A CSV for the team's most recent completed run |
+
+Bare `GET /runs/<run_id>` is removed (404). `scorecard` and `scorecard.html` are
+not accepted CSV filenames (422); the dedicated scorecard route no longer exists.
 
 Refusals: `400` unknown team, `409` a run is already in progress, `404` unknown run,
 `422` a malformed request body.
 
 ---
+
+The asynchronous operator API (`POST /run-jobs`, `GET /run-jobs/{job_id}`) returns durable
+submission state separately from completed report data. Its status/response fields, idempotency
+and error semantics are defined in [async-runs.md](async-runs.md). Existing synchronous
+`POST /runs` returns JSON only; CSV column meanings are unchanged.
 
 ## 8. Severity
 
@@ -277,7 +273,7 @@ promoted to a neighbouring level.
 
 ## 9. What is stored but not exported
 
-The SQL store holds an audit trail the four files do not carry. Reach for it when a number
+The SQL store holds an audit trail the three CSV files do not carry. Reach for it when a number
 needs defending.
 
 | Column | In | Holds |

@@ -23,6 +23,8 @@ from alerts_bi_shared.insights import (
 )
 from alerts_bi_shared.insights.daily import daily_points
 from alerts_bi_shared.insights.estimate import v1_rule_key
+from alerts_bi_shared.insights.reader import read_history, read_summary
+from alerts_bi_shared.insights.stored import schema_totals as stored_schema_totals
 
 from .application_filter import ALL_APPLICATIONS, ApplicationFilter, predicate
 from .queries import _evidence
@@ -234,24 +236,33 @@ def load_portal_summary(
         """,
         {"run_id": run_id},
     )
-    app_clause, app_params = predicate(applications)
-    alerts = db.query(
-        f"""
-        SELECT alert_schema, application, key_field, message, severity, provider,
-               alert_rule_url, component, node_name, row_count, first_seen, last_seen,
-               quality_state, core_rule_ids, readiness_rule_ids, llm_principle_id,
-               llm_confidence, clear_count, max_clear_cycles_24h, fire_pattern, unseen,
-               max_episode_firing_rows, open_since, findings_evidence
-        FROM portal_alerts
-        WHERE run_id = :run_id AND {app_clause}
-        ORDER BY alert_schema ASC, application ASC, key_field ASC
-        """,
-        {"run_id": run_id, **app_params},
-    )
-
+    facts, alerts, application_daily = read_summary(db, run_id, "portal", applications.selected)
     if applications.active:
-        totals, rules = _application_totals(alerts, totals)
-        daily = []
+        daily = application_daily
+        # A measured team with an empty selection has zero unseen identities;
+        # no historical daily event union can be reconstructed from that fact.
+        for total in totals:
+            selected = facts["schemas"][str(total["alert_schema"])]
+            if not selected["distinct_alerts"] and total.get("unseen") is not None:
+                selected["unseen_alerts"] = 0
+        schemas = stored_schema_totals(facts, daily, admin=False)
+        rules = [
+            {"alert_schema": schema, "rule_id": rid, "events": values[0], "alerts": values[1]}
+            for schema in _SCHEMAS
+            for rid, values in facts["schemas"][schema]["rules"].items()
+        ]
+    else:
+        schemas = _schema_totals(totals)
+    history = read_history(
+        db,
+        team_id,
+        run_id,
+        review["window_end"],
+        "portal",
+        applications.selected,
+        facts,
+        published=True,
+    )
 
     return SummaryInputs(
         surface="portal",
@@ -261,7 +272,7 @@ def load_portal_summary(
         window_end=review["window_end"],
         phase=str(review["phase_derived"]),
         phase2_readiness_pct=_optional_float(review["phase2_readiness_pct"]),
-        schemas=_schema_totals(totals),
+        schemas=schemas,
         rules=tuple(
             RuleTotal(
                 schema=str(row["alert_schema"]),
@@ -271,9 +282,10 @@ def load_portal_summary(
             )
             for row in rules
         ),
-        alerts=tuple(_alert(row) for row in alerts),
+        alerts=alerts,
         published=True,
-        history=_history(db, team_id, review["window_end"], applications),
+        history=history,
+        facts=facts,
         v1_rule_effort_days=_optional_float(review["v1_rule_effort_days"]),
         daily=daily_points(daily),
         applications=applications.selected,

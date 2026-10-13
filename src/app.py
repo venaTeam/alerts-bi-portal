@@ -18,12 +18,12 @@ login; nothing here reaches Elasticsearch, the model, or the run pipeline.
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from typing import Annotated
 
-from alerts_bi_shared.db.connection import Database, connect
+from alerts_bi_shared.db.connection import Database, WebDatabasePool
 from alerts_bi_shared.insights import TeamSummary
 from alerts_bi_shared.insights.summary import summarize
 from alerts_bi_shared.logging_setup import log, redact_error
@@ -86,7 +86,17 @@ def client_allowed(host: str | None, networks: tuple[IpNetwork, ...]) -> bool:
 
 
 def build_portal(settings: PortalSettings) -> FastAPI:
+    pool = WebDatabasePool(settings.sql, settings.database)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            pool.dispose()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="Alerts BI review portal",
         version=APP_VERSION,
         # No interactive docs and no OpenAPI document: the portal has no API to explore, and
@@ -100,7 +110,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
     @contextmanager
     def database() -> Iterator[Database]:
         try:
-            with connect(settings.sql, settings.database) as db:
+            with pool.connect() as db:
                 yield db
         except HTTPException:
             raise
@@ -203,10 +213,16 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         )
         return RedirectResponse(target, status.HTTP_303_SEE_OTHER)
 
-    def _tab(team_id: str, week: str | None, tab: str, request: Request) -> HTMLResponse:
+    def _tab(
+        team_id: str, week: str | None, tab: str, request: Request, *, legacy: bool = False
+    ) -> Response:
         with database() as db:
             reviews = _reviews(db, team_id, request)
             selected = reviews[-1] if week is None else _week(reviews, week)
+            if legacy:
+                redirect = _legacy_worklist(team_id, selected, request)
+                if redirect is not None:
+                    return redirect
             if tab == "history":
                 return HTMLResponse(tabs.history_page(reviews, selected))
             summary = _summary(db, selected)
@@ -231,11 +247,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state: StateFilter = "all",
         rule: RuleFilter = "",
     ) -> Response:
-        with database() as db:
-            latest = _reviews(db, team_id, request)[-1]
-        return _legacy_worklist(team_id, latest, request) or _tab(
-            team_id, None, "overview", request
-        )
+        return _tab(team_id, None, "overview", request, legacy=True)
 
     @app.get("/teams/{team_id}/weeks")
     def pick_week(
@@ -268,11 +280,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state: StateFilter = "all",
         rule: RuleFilter = "",
     ) -> Response:
-        with database() as db:
-            selected = _week(_reviews(db, team_id, request), week)
-        return _legacy_worklist(team_id, selected, request) or _tab(
-            team_id, week, "overview", request
-        )
+        return _tab(team_id, week, "overview", request, legacy=True)
 
     @app.get("/teams/{team_id}/weeks/{week}/fix", response_class=HTMLResponse)
     def fix_list(
@@ -300,6 +308,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
                 rule=rule_filter,
                 page=page,
                 page_size=settings.page_size,
+                cursor=request.query_params.get("cursor"),
                 applications=selected.applications,
             )
             counts = queries.worklist_counts(
@@ -328,7 +337,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         )
 
     def _register(tab: str) -> None:
-        def one_tab(team_id: str, week: str, request: Request) -> HTMLResponse:
+        def one_tab(team_id: str, week: str, request: Request) -> Response:
             return _tab(team_id, week, tab, request)
 
         app.get(
