@@ -1,6 +1,6 @@
 """The team week in tabs (product owner, 2026-10-04), rendered from a hand-built summary.
 
-Every tab keeps the portal's rules - no script, no inline style, escaped alert text, none of
+Every tab keeps the portal's rules - one local script, no inline style, escaped alert text, none of
 the words a reader must never see, v1 and v2 never added together - and the design review's
 own: no rule id in anything a reader reads, short copy, a week menu of plain links.
 """
@@ -174,9 +174,13 @@ def visible(page: str) -> str:
 
 
 @pytest.mark.parametrize("name", PAGES)
-def test_nothing_executes_and_nothing_is_styled_inline(name: str) -> None:
+def test_only_the_local_filter_script_and_no_inline_style(name: str) -> None:
     page = PAGES[name]()
-    assert "<script" not in page and "&lt;script&gt;" in page
+    from src.assets import APPLICATION_FILTER_SCRIPT_PATH
+
+    assert page.count("<script") == 1
+    assert f'<script src="{APPLICATION_FILTER_SCRIPT_PATH}" defer></script>' in page
+    assert "&lt;script&gt;" in page
     assert " style=" not in page, "inline styles would need unsafe-inline in the CSP"
     assert 'href="javascript:' not in page
 

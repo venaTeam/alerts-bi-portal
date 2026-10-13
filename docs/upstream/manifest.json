@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/venaTeam/alerts-bi-design",
-  "revision": "821daa350cc2e99405cba76dbb379cc520750b48",
+  "revision": "08d18fda2ae2e4b2e2aba381edde67841f8eed2b",
   "sha256": {
     "docs/upstream/Alerting_Guide_Appchi_EN.md": "d1974902e7c5f3e541a35cd0e4a5e6d477ebb50fc5b4e9ac5f0b0417bab86274",
-    "docs/upstream/alerts_bi_design.md": "434dc62a3490cb3b0b08be0f2dbbc0656a9996baf9da6989ecb7156fdb324b7e",
+    "docs/upstream/alerts_bi_design.md": "fbabe4d0dc417b7b818c38dd3e993b62e19f60284ff034e2f7af15dcd6723d45",
     "docs/upstream/alerts_bi_flow.md": "f77b5f2e77e4a1e9c1d996de4b8026501ebf7301d9105f6960203135d6731179",
-    "docs/upstream/alerts_bi_implementation_plan.md": "15f5c6dfb75f3fe017cf230104bcb17d1718a1e0753dd4090c1a24574eb16014",
+    "docs/upstream/alerts_bi_implementation_plan.md": "289703c8afc7bf4427d5917a15f3222db71466e50c414c4fdcf64248f025470d",
     "docs/upstream/handoffs/2026-10-01-team-summary-release.md": "4467ee9e762a5736a66b301dc4c123f5e42cfa86e5e65c053baa5dd083449375",
     "docs/upstream/llm_review_upgrade_plan.md": "141b8aec0b1d2a03bc13700600ba8c121f84026d427718488f720e5f6e5935ea",
     "docs/upstream/openshift-deployment.md": "79d24fe8dcc35eb110be9fc98ee4b8021ff6dbbd742a025a25d745280b8e87a0",

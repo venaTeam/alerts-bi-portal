@@ -8,7 +8,7 @@ The copy names problems in plain words and never shows a rule id: ids travel onl
 query strings of filter links. Text stays short: a label, a number, one sentence to fix.
 
 The portal's rules hold on every tab: weekly totals, never a per-day rate; no run id or
-version; v1 and v2 never added together; no script and no inline ``style``; every alert value
+version; v1 and v2 never added together; no inline script or ``style``; every alert value
 escaped through :func:`~alerts_bi_portal.pages.h`.
 """
 
@@ -70,6 +70,7 @@ SCHEMAS: Final = ("v1", "v2")
 #: How many rows the short lists show; the Fix list has every alert.
 TOP_LOUD: Final = 4
 TOP_LISTED: Final = 8
+APPLICATION_CHIPS_VISIBLE: Final = 3
 #: Phase-2 readiness, in the order a team should work through it: the gap that blocks
 #: completion first.
 READINESS_ORDER: Final = ("R9", "R8", "R10")
@@ -128,7 +129,6 @@ def _application_filter(selected: Review, active: str, query: Mapping[str, str])
         if value
     )
     label = "All applications" if scope.selected is None else f"{len(scope.selected)} selected"
-    current = _tab_url(selected, active, **query)
     clear = tab_url(selected.team_id, selected.week, active, **query)
     chips = []
     for app in scope.selected or ():
@@ -138,7 +138,17 @@ def _application_filter(selected: Review, active: str, query: Mapping[str, str])
             f'<a class="app-chip" href="{h(url)}" aria-label="Remove {h(app or "empty application")}">'
             f'{h(app or "(empty application)")} <span aria-hidden="true">&times;</span></a>'
         )
-    selection = '<div class="app-chips">' + "".join(chips) + "</div>" if chips else ""
+    visible = "".join(chips[:APPLICATION_CHIPS_VISIBLE])
+    if len(chips) > APPLICATION_CHIPS_VISIBLE:
+        visible += (
+            '<details class="app-chips-more"><summary class="app-chip">'
+            f'<span class="app-show-more">Show more ({len(chips) - APPLICATION_CHIPS_VISIBLE})</span>'
+            '<span class="app-show-less">Show less</span></summary>'
+            '<div class="app-chips">'
+            + "".join(chips[APPLICATION_CHIPS_VISIBLE:])
+            + "</div></details>"
+        )
+    selection = '<div class="app-chips">' + visible + "</div>" if chips else ""
     reset = f'<a class="app-reset" href="{h(clear)}">Show all</a>' if scope.active else ""
     note = (
         "No applications selected. Choose applications to display alerts."
@@ -151,13 +161,20 @@ def _application_filter(selected: Review, active: str, query: Mapping[str, str])
         '<div class="app-menu"><button class="filter-toggle" id="application-filter-toggle" '
         'type="button" popovertarget="application-filter-menu">' + h(label) + _CHEVRON + "</button>"
         f'<form class="app-popover filter-popover" id="application-filter-menu" popover="auto" '
+        f'data-all-applications="{str(scope.selected is None).lower()}" '
         f'method="get" action="{h(action_url)}">'
         '<input type="hidden" name="scope" value="selected">'
         + hidden
-        + '<fieldset><legend>Choose applications</legend><div class="app-options">'
+        + '<label class="app-search-label" for="application-search">Search applications</label>'
+        '<input class="app-search" id="application-search" type="search" '
+        'placeholder="Search applications" autocomplete="off" autofocus '
+        'aria-controls="application-options">'
+        '<fieldset><legend>Choose applications</legend><div class="app-options" id="application-options">'
         + (checks or '<p class="sub">No applications found.</p>')
-        + '</div></fieldset><div class="app-actions"><button class="button primary" type="submit">Apply</button>'
-        f'<a class="button" href="{h(current)}">Cancel</a></div></form></div>'
+        + '</div><p class="sub app-search-empty" role="status" hidden>No applications match your search.</p>'
+        '</fieldset><div class="app-actions"><button class="button primary" type="submit">Apply</button>'
+        '<button class="button" type="button" popovertarget="application-filter-menu" '
+        'popovertargetaction="hide">Cancel</button></div></form></div>'
         f'{selection}{reset}</div><p class="sub app-hint">{note}</p></section>'
     )
 

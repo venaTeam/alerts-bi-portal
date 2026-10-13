@@ -70,6 +70,29 @@ def test_every_tab_and_week_link_preserves_selection_and_escapes_options() -> No
     assert "No applications selected" in tabs.overview_page([removed], removed, summary())
 
 
+def test_filter_disclosure_and_form_preserve_explicit_scope() -> None:
+    names = (*(f"app-{i}" for i in range(8)), 'other <script>"')
+    selected = review(applications=ApplicationFilter(names, names))
+    page = tabs._application_filter(selected, "fix", {"schema": "v1", "state": "rule_flagged"})
+    assert 'data-all-applications="false"' in page
+    assert 'id="application-search" type="search"' in page
+    assert 'name="schema" value="v1"' in page
+    assert 'name="state" value="rule_flagged"' in page
+    assert 'popovertargetaction="hide">Cancel</button>' in page
+    assert 'role="status" hidden>No applications match your search.' in page
+    before, rest = page.split('<details class="app-chips-more">', 1)
+    assert before.count('class="app-chip" href=') == 3
+    assert rest.count('class="app-chip" href=') == len(names) - 3
+    assert "Show more (6)" in rest and "Show less" in rest
+    assert "Remove other &lt;script&gt;&quot;" in rest
+    assert "<script>" not in page
+    all_page = tabs._application_filter(
+        review(applications=ApplicationFilter(None, names)), "overview", {}
+    )
+    assert 'data-all-applications="true"' in all_page
+    assert '<details class="app-chips-more">' not in all_page
+
+
 def test_subset_totals_count_matches_without_inventing_union_or_unseen_events() -> None:
     alerts = [
         {
