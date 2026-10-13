@@ -1,7 +1,7 @@
 """The reader portal's guarantees that need no database (design section 7.10).
 
 GET only; no import path to the run pipeline, the run endpoint, Elasticsearch, the model or
-an operator write; only allowlisted clients; no script and no inline style; alert text
+an operator write; only allowlisted clients; local scripts and no inline style; alert text
 escaped; only absolute http(s) URLs become links.
 """
 
@@ -17,6 +17,7 @@ from alerts_bi_shared.ui.charts import ChartPoint, line_chart
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from src.app import SECURITY_HEADERS, build_portal, client_allowed
+from src.assets import APPLICATION_FILTER_SCRIPT, APPLICATION_FILTER_SCRIPT_PATH
 from src.config import PortalSettings, parse_networks
 from src.pages import safe_link
 from src.queries import Review, SchemaTotals
@@ -100,13 +101,26 @@ def test_an_empty_or_malformed_allowlist_is_rejected() -> None:
         parse_networks(("office",))
 
 
-def test_the_security_headers_forbid_script_and_inline_style() -> None:
+def test_the_security_headers_allow_only_local_scripts_and_no_inline_style() -> None:
     policy = SECURITY_HEADERS["Content-Security-Policy"]
     assert "default-src 'none'" in policy
-    assert "unsafe-inline" not in policy and "script-src" not in policy
+    assert "unsafe-inline" not in policy and "unsafe-eval" not in policy
+    assert "script-src 'self';" in policy
     with TestClient(build_portal(SETTINGS), client=("8.8.8.8", 50000)) as client:
         refused = client.get("/")
     assert refused.headers["content-security-policy"] == policy
+
+
+def test_the_filter_script_is_a_static_read_with_network_guards() -> None:
+    with TestClient(build_portal(SETTINGS), client=("10.1.2.3", 50000)) as client:
+        response = client.get(APPLICATION_FILTER_SCRIPT_PATH)
+        assert response.status_code == 200
+        assert response.text == APPLICATION_FILTER_SCRIPT
+        assert response.headers["content-type"].startswith("text/javascript")
+        assert "immutable" in response.headers["cache-control"]
+        assert client.post(APPLICATION_FILTER_SCRIPT_PATH).status_code == 405
+    with TestClient(build_portal(SETTINGS), client=("8.8.8.8", 50000)) as client:
+        assert client.get(APPLICATION_FILTER_SCRIPT_PATH).status_code == 403
 
 
 # ------------------------------------------------------------------ links and escaping

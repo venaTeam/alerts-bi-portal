@@ -1,7 +1,7 @@
 # Alerts BI review portal
 
 The independent GET-only reader app renders published weeks from the six `portal_*`
-SQL Server views. It keeps the existing network allowlist, script-free pages, publication
+SQL Server views. It keeps the existing network allowlist, publication
 isolation and weekly totals. It cannot execute runs, publish reviews or record decisions.
 
 Each team week has seven tabs: Overview, Fix list, Volume, Dashboards, Migration,
@@ -60,6 +60,13 @@ the initial extraction used code from before that update. Shared presentation is
 
 The application selector above the team tabs filters alerts and weekly summaries across
 every tab. Choose several applications and Apply, remove individual chips, or Show all.
+Search within the dropdown without losing checked applications outside the results.
+Cancel, Escape and outside-click discard pending edits without reloading. Applying an
+unchanged all-applications view keeps **All applications**. Explicit subsets stay explicit.
+Selections show the first three chips with **Show more** / **Show less** for the rest.
+One static same-origin script enhances search, discard and unchanged-all submission;
+CSP continues to block inline scripts, eval and third-party scripts. GET filters,
+native Cancel dismissal and chip disclosure remain usable without scripting.
 Selections persist in the URL through weeks, alert details and Fix list pagination.
 An empty selection shows no alerts. Daily charts and event shares that cannot be split by
 application are labeled unavailable; published phase, readiness percentage and notes remain

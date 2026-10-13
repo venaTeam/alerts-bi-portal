@@ -8,8 +8,8 @@ for:
   before routing. There is no form that posts and nothing that writes.
 * **Company network only.** A client whose address is not on the configured allowlist gets
   403. There are no viewer logins.
-* **Nothing executes in the browser.** The pages carry no script, and the
-  Content-Security-Policy forbids script, framing, plugins and inline styles.
+* **Scoped browser enhancement.** One local application-selector script; the
+  Content-Security-Policy forbids inline scripts, eval, framing, plugins and inline styles.
 
 Every page is rendered from the ``portal_*`` views over the application's SQL
 login; nothing here reaches Elasticsearch, the model, or the run pipeline.
@@ -33,7 +33,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 
 from . import pages, queries, tabs
 from .application_filter import from_request
-from .assets import STYLESHEET, STYLESHEET_PATH
+from .assets import (
+    APPLICATION_FILTER_SCRIPT,
+    APPLICATION_FILTER_SCRIPT_PATH,
+    STYLESHEET,
+    STYLESHEET_PATH,
+)
 from .config import IpNetwork, PortalSettings
 from .readiness import check_schema
 from .summary_queries import load_portal_summary
@@ -44,7 +49,7 @@ READ_METHODS = frozenset({"GET", "HEAD"})
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
@@ -136,6 +141,14 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         return Response(
             STYLESHEET,
             media_type="text/css; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.get(APPLICATION_FILTER_SCRIPT_PATH, include_in_schema=False)
+    def application_filter_script() -> Response:
+        return Response(
+            APPLICATION_FILTER_SCRIPT,
+            media_type="text/javascript; charset=utf-8",
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 

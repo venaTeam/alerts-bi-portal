@@ -4,9 +4,9 @@ Alert values are free text written by other teams and by a model. Every one goes
 :func:`h`, and a URL becomes a link only when :func:`safe_link` accepts it as an absolute
 ``http(s)`` address with a host - a ``javascript:`` runbook is shown as text, never followed.
 
-The pages carry no script. Tabs, filters, pagination, the week menu and the chart points are
-plain links, so the portal works with scripting disabled and its Content-Security-Policy can
-forbid scripts outright. A team's week is rendered by :mod:`alerts_bi_portal.tabs`.
+Navigation and GET filters work without scripting. One local external script enhances the
+application selector; inline scripts and styles remain forbidden by CSP.
+A team's week is rendered by :mod:`alerts_bi_portal.tabs`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from urllib.parse import quote, urlencode
 from alerts_bi_shared.ui.explain import format_date, format_week
 from alerts_bi_shared.ui.html import PHASE_STEPS, SCHEMA_NAMES, h, safe_link
 
-from .assets import STYLESHEET_PATH
+from .assets import APPLICATION_FILTER_SCRIPT_PATH, STYLESHEET_PATH
 from .queries import Review, SchemaTotals, TeamSummary
 
 __all__ = [
@@ -111,6 +111,7 @@ def layout(title: str, body: str) -> str:
         '<meta name="referrer" content="no-referrer">'
         f"<title>{h(title)} · Alerts BI</title>"
         f'<link rel="stylesheet" href="{STYLESHEET_PATH}">'
+        f'<script src="{APPLICATION_FILTER_SCRIPT_PATH}" defer></script>'
         "</head><body>"
         '<header class="topbar"><div class="wrap">'
         '<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>'
