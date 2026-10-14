@@ -13,6 +13,11 @@ PORTAL_VIEWS = frozenset(
     {
         "portal_alerts",
         "portal_daily_metrics",
+        "portal_run_summaries",
+        "portal_alert_list",
+        "portal_rule_membership",
+        "portal_application_daily",
+        "portal_v1_rules",
         "portal_decisions",
         "portal_reviews",
         "portal_rule_totals",
@@ -26,7 +31,7 @@ def schema_probes() -> tuple[str, ...]:
 
     This resource is copied byte-for-byte from ``contracts/sql-views.json``. No caller or
     environment value can supply SQL identifiers; validation also prevents a mistaken
-    contract update from expanding readiness outside the six approved reader views.
+    contract update from expanding readiness outside the approved reader views.
     """
     rows = json.loads(files(__package__).joinpath("sql-views.json").read_text("utf-8"))
     columns: dict[str, list[tuple[int, str]]] = defaultdict(list)

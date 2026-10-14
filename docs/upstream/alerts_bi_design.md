@@ -1,5 +1,43 @@
 # Alerts BI — Design Document
 
+## Read-path performance — 2026-10-13
+
+Approved bounded SQL summaries, application daily facts, pooled web reads, indexed
+detail navigation and reuse of valid scheduled results are defined in
+[read-path-performance.md](read-path-performance.md). Execution concurrency,
+retention and deployment/operations UX remain unchanged.
+
+## Automatic deployment migrations — accepted 2026-10-13
+
+The product owner requested migrations to run automatically with admin deployment. The
+single-replica Recreate Deployment runs `db setup` in a regular migration init container
+using the same image and SQL configuration, targeting ADMIN_DATABASE when set. Missing
+revisions apply before UI/worker/proxy startup; failure blocks those containers. Existing
+revision checksums and data-preserving migration behavior are retained. Normal rollout
+no longer requires a separately launched migration Job. See openshift-deployment.md.
+
+## Standalone HTML output removal — accepted 2026-10-13
+
+The product owner requested complete removal of standalone run HTML output. The supported
+exports are exactly `daily_metrics.csv`, `rule_counts.csv`, and `alert_worklist.csv`.
+The authenticated team workspace still displays completed runs, metrics, findings and run
+details. No standalone scorecard renderer, route, file or download link remains. `POST /runs`
+returns JSON with three CSV links, including for `Accept: text/html`; its `scorecard` field
+is removed. Bare `GET /runs/{run_id}` and the dedicated scorecard route are removed;
+the CSV filename validator refuses `scorecard.html`. This supersedes all older standalone
+HTML/four-output requirements below. Operations 0.2.0 removes `report.html` and changes the
+public renderer to three CSV outputs; shared 0.1.3, CSV columns and portal views are unchanged.
+Existing immutable operations versions remain historical artifacts. Legacy HTML cleanup
+remains available for old output directories. See [output meanings](outputs.md).
+
+## Asynchronous manual runs — 2026-10-13
+
+The product owner approved durable background manual execution, completion polling and removal
+of generated per-run HTML. [The async run contract](async-runs.md) defines acceptance, worker
+coordination, interruption recovery, API compatibility, output storage and rollout. It supersedes
+the synchronous browser and automatic four-file writing requirements below. Migration 010 adds
+job state; SQL report data, published views, scoring and immutable migrations 001–009 are unchanged.
+
 ## Complete runs retirement — 2026-10-12
 
 The product owner requested complete source and service consolidation into `alerts-bi-admin`.
@@ -568,7 +606,7 @@ The **delta check** — running the count with and without the suppression predi
   **Local SQL Server setup** (decided 2026-08-29): extend the existing Docker Compose mock with a pinned SQL Server 2022 image, readiness health check, and persistent development volume. It hosts a persistent `alerts_bi_dev` database and a disposable `alerts_bi_test` database. Credentials come from an uncommitted `.env` with placeholders in `.env.example`. The application provides commands to apply and inspect migrations and to recreate only the explicitly named test database. Production uses the same migrations with an externally supplied connection string; tests do not substitute SQLite or another engine.
 * **Elasticsearch is the sole source** (decided 2026-08-27). The SQL Server hot-alerts table holds only currently-active alerts — a subset of what ES already carries, with no historical depth, and nothing in it that ES lacks. Its one unique property is live state, which nothing in this design measures. It is read for exactly one thing and it is not read by this tool: the teams' own Grafana panels query it, which is why section 5.2 parses those queries.
 * **Primary audience: the standardization team; output: one team scorecard** (decided 2026-08-27). Each MVP run generates the selected team's scorecard and work list. Teams do not self-serve in the MVP: the numbers are presented **by** the standardization team, including in company-wide meetings. A cross-team leaderboard is deferred because independently timed team runs do not share an identical reporting window.
-* **Output format: a generated per-team scorecard (HTML + CSV) rendered from the store** (decided 2026-08-27). Grafana can be pointed at the same table later. The store is the non-negotiable part (section 3.5); coupling the first deliverable to a dashboard build is not.
+* **Historical output format, superseded by the 2026-10-13 removal amendment: a generated per-team scorecard (HTML + CSV) rendered from the store** (decided 2026-08-27). Grafana can be pointed at the same table later. The store is the non-negotiable part (section 3.5); coupling the first deliverable to a dashboard build is not.
   **Exact MVP output contract** (approved 2026-08-29): generate one self-contained HTML scorecard with sections for run metadata; derived migration phase and completion readiness; schema-separated volume and diagnostics; deterministic quality, LLM quality, review, good, unassessed and phase-2 gaps; suppression visibility and supplied panel ids; rule/principle breakdown; actionable work list; and limitations. It contains no cross-run trend, delta, leaderboard, or combined v1/v2 volume conclusion. Generate exactly `daily_metrics.csv`, `rule_counts.csv`, and `alert_worklist.csv`. Ordering is deterministic; CSV carries full values even when HTML shortens display text; all alert content is HTML-escaped; spreadsheet-formula prefixes (`=`, `+`, `-`, `@`) are neutralized in CSV; and every output is rendered only from committed SQL data.
 * **Grain and window** (decided 2026-08-27; storage shape resolved 2026-08-29). A run reports the exact rolling UTC window above and nothing else — no comparison against the previous run or against a baseline (section 2). SQL Server stores one run record plus one metric row per run × team × schema × UTC calendar date touched by the window. Because a rolling 168-hour range normally touches eight UTC dates, its first and last buckets may be partial. Each daily row stores its actual `bucket_start`, `bucket_end`, and `covered_hours`; rows are assigned by the UTC date of `@timestamp`. The scorecard aggregates those daily rows over the exact run window using section 3.3's formulas. Storing at a finer grain than the report keeps any future window a presentation choice rather than a data-collection one. Per section 3.3, every distinct figure is published as a **daily rate**, never as a window sum.
 
@@ -614,7 +652,7 @@ The SQL Server store has one run-level record, daily metric rows, and supporting
 * Durable LLM verdicts keyed by (`application`, `key_field`, `prompt_version`, `model_version`), including `classified_at`, verdict, principle, confidence, representative document and document hash.
 * Panel parses keyed by SQL-text hash, including the frozen interpretation and any unmeasured reason.
 
-The HTML scorecard and CSV files are rendered from these stored rows. The run record carries the phase label next to the seven-day result; the daily metric rows preserve the finer reporting grain.
+The admin workspace and three CSV files are rendered from these stored rows. The run record carries the phase label next to the seven-day result; the daily metric rows preserve the finer reporting grain.
 
 **The phase group is small because two of the three phase metrics are already other columns.** Section 3.4's phase-0 and phase-1 headlines are `distinct_alerts` and `suppressed`, both of which the daily volume and visibility rows already carry — so only `phase_derived` and `phase2_readiness_pct` belong on the run record. `phase_derived` is computed by section 3.4's rule and is a label, not a score: nothing in the report grades a team against it.
 
@@ -838,12 +876,54 @@ Scheduling is otherwise unchanged from the design: the CronJob is the only trigg
 **What still needs judgment gets a web screen instead of a pod shell: the operator admin app** (`alerts-bi admin`). It is a third application, beside the reader portal and the trigger surface, for the standardization team only:
 
 * It shows every registered team, whether it is on the schedule, its latest published week and the schedule's last outcome; every run of a team with its publication state; each run's full scorecard, rendered from SQL; and a published week's findings with their decision history.
-* It lets an operator publish a run (with a note, `replace` or `allow gap`), withdraw a published week with a reason, and record a decision on a finding. Each action calls the same `src.review` functions as the command line and follows the section 7.10 rules exactly.
+* It lets an operator publish a run (with a note or `replace`), withdraw a published week with a reason, permanently delete a run, and record a decision on a finding. Publication, withdrawal and decisions use the same operations as the command line and follow section 7.10.
 * **Every action is recorded under the signed-in person's identity**, from the login proxy.
 
 **Access.** The app has no login of its own. It sits behind OpenShift's `oauth-proxy`, which signs the person in and admits only the standardization team (a SubjectAccessReview that only that group's role satisfies), and passes their name in `X-Forwarded-User`. The app trusts that header, which is safe only because nothing else can reach the app: it binds to loopback and refuses any other address, and the proxy is a sidecar sharing the pod's loopback. Every write is a POST carrying an HMAC token of the user and date under `ADMIN_SECRET`, and a browser-declared cross-site request is refused, so a page elsewhere on the network cannot act through a signed-in operator's browser. It runs with the owning SQL credential, has its own internal-only Route, and is never mounted on the portal or the trigger surface.
 
 No alerting was added: problems surface as failed CronJob runs and on the admin app's team list.
+
+**Amended 2026-10-13 (product owner): Monday windows and permanent deletion.** New manual
+runs through the admin form, JSON trigger and supported CLI cover Monday 00:00 UTC inclusive
+to the selected Monday 00:00 UTC exclusive. The form picks a date only, with a seven-day
+step anchored on a Monday. Server validation rejects other weekdays and non-midnight
+instants, including forged submissions. Omitted API/CLI boundaries use the most recent
+completed Monday week. Historical stored windows and the fixed-clock analysis oracle are
+unchanged; the engine can still read and render those runs.
+
+The admin publication dialog has no `allow gap` option, and forged values cannot override
+the server's missing-week check. Monday alignment does not prevent skipped weeks or gaps
+caused by withdrawal/deletion. CLI recovery and the scheduler's expired-week exception in
+sections 7.10–7.11 retain their existing explicit gap policy.
+
+An operator can permanently delete any stored run, published, withdrawn, unpublished or
+failed, after an explicit confirmation that identifies the team, week and run. This removes
+the parent run, metrics, findings, panels, batch records, publications, human decisions,
+schedule rows for that run, and its run-scoped model audit in one SQL transaction. This is
+an explicit exception to section 7.10's retained publication/decision history: decisions
+remain append-only while their parent run exists. Migration `009_run_deletion` permits
+decision cleanup only in the owning connection's explicit whole-run deletion scope;
+a checked parent foreign key rejects orphan inserts, and updates remain forbidden. Deletion
+uses the manual gate, scheduler lock, model-review lock and run-row lock; active work is
+refused. The authenticated actor and run id are logged without alert content.
+
+**Concurrency clarified 2026-10-13:** manual HTTP/API runs, manual CLI runs and reports, the weekly
+schedule and deletion share the database's existing `alerts-bi-weekly` SQL session lock.
+Manual runs hold it before the Elasticsearch scan through persistence and all report
+writing, including with model assessment disabled. Standalone CLI `report` holds the same
+lock before run-id/team lookup through the final file write, preventing reports from
+reappearing after deletion succeeds. The lock uses its own connection, so
+data-connection commits and model-audit lock release cannot end this protection early.
+Contending HTTP runs/deletion return 409; the CLI fails with a busy message. Both success
+and failure release the lock. Roll out updated manual CLI clients alongside the app;
+an older CLI that does not take the shared lock cannot coordinate with deletion.
+
+Generated reports in the configured manual and weekly output locations are removed after
+SQL commit; a cleanup failure is reported distinctly. Custom CLI export locations are not
+tracked and need separate cleanup. Shared prompt artifacts, verdict caches and panel parses
+remain because other runs can use them. Deleting a published run removes it from the portal
+and all its download routes. The weekly schedule may recreate a deleted due week; deletion
+does not disable enrollment. No stored run is deleted as part of installing this change.
 
 ### 7.13 LLM review quality, evaluation and durable audit
 

@@ -1,6 +1,6 @@
 # Alerts BI review portal
 
-The independent GET-only reader app renders published weeks from the six `portal_*`
+The independent GET-only reader app renders published weeks from eleven `portal_*`
 SQL Server views. It keeps the existing network allowlist, publication
 isolation and weekly totals. It cannot execute runs, publish reviews or record decisions.
 
@@ -25,7 +25,7 @@ when using a reverse proxy. The app queries only approved views even though the 
 SQL credential can have broader privileges. Obsolete `PORTAL_SQL_*` and `PORTAL_DATABASE`
 settings have no effect. Elasticsearch and model configuration are unnecessary.
 
-`GET /healthz` checks every required column of all six reader views with `SELECT TOP 0`.
+`GET /healthz` checks every required column of all eleven reader views with `SELECT TOP 0`.
 It returns 503 if a view or required column is unavailable, without reading alert rows,
 querying database metadata or applying migrations. The packaged column contract matches
 the pinned design snapshot; deployment must still use the release's supported migration set.
@@ -56,7 +56,12 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.3 wheel. Standalone imports and schema readiness remain intact.
+`alerts-bi-shared` 0.1.5 wheel. Standalone imports and schema readiness remain intact.
+
+Summaries use exact stored aggregates and bounded examples. Fix lists use seek pagination
+and fetch evidence only for the visible page; existing numbered-page links still work.
+Each web process owns a bounded SQL connection pool. Publication is checked on every request.
+Deploy after admin migrations 012 and 013; see `docs/upstream/read-path-performance.md`.
 
 The application selector above the team tabs filters alerts and weekly summaries across
 every tab. Choose several applications and Apply, remove individual chips, or Show all.
@@ -84,5 +89,10 @@ namespace. `poetry build` uses the declared setuptools backend to produce the
 independently installable wheel and source archive. Docker installs that wheel.
 Run `poetry check --lock` to validate the committed lockfile. `docs/upstream/`
 is a pinned historical snapshot; current service commands are listed here.
+
+When updating the vendored shared wheel, finish the artifact first, then run
+`poetry update alerts-bi-shared --lock --no-cache`. The unit suite checks the actual
+archive hash against the lock. Also verify `poetry sync --only main --no-root` in a
+fresh environment: `poetry check --lock` does not validate the vendored file's bytes.
 
 Shared-library source and migration/mock tooling are maintained in alerts-bi-admin. Portal remains independently installable with its pinned shared wheel and requires no admin source, engine, operations library or registry. See docs/upstream/runs-retirement.md for the coordinated source retirement.

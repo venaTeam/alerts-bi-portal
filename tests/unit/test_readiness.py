@@ -21,7 +21,7 @@ def client_for(monkeypatch: pytest.MonkeyPatch, db: Mock) -> TestClient:
     def connect(*args: object, **kwargs: object) -> Iterator[Database]:
         yield cast(Database, db)
 
-    monkeypatch.setattr(app, "connect", connect)
+    monkeypatch.setattr("alerts_bi_shared.db.connection.WebDatabasePool.connect", connect)
     settings = PortalSettings(sql=load_sql_config(), database="alerts_bi_test")
     return TestClient(app.build_portal(settings), client=("127.0.0.1", 50000))
 
@@ -40,7 +40,7 @@ def test_healthy_schema_returns_200_without_reading_rows(monkeypatch: pytest.Mon
     assert response.status_code == 200
     assert response.json()["ok"] is True
     statements = [call.args[0] for call in db.query.call_args_list]
-    assert len(statements) == 6
+    assert len(statements) == len(PORTAL_VIEWS)
     assert {statement.rsplit(" FROM ", 1)[1] for statement in statements} == {
         f"[{view}]" for view in PORTAL_VIEWS
     }

@@ -1,5 +1,47 @@
 # Alerts BI — Runtime Flow
 
+## Bounded read paths — accepted 2026-10-13
+
+The [performance contract](read-path-performance.md) governs compact stored summaries, bounded UI reads, pooled web connections, seek navigation and completed-analysis reuse. It supersedes earlier descriptions of full alert loads and unavailable application daily metrics for new runs. Historical missing measurements remain unavailable; CSV definitions, publication isolation, serialized execution and retention policy are unchanged.
+
+## Standalone HTML output removal — accepted 2026-10-13
+
+The product owner requested complete removal of standalone run HTML output. The supported
+exports are exactly `daily_metrics.csv`, `rule_counts.csv`, and `alert_worklist.csv`.
+The authenticated team workspace still displays completed runs, metrics, findings and run
+details. No standalone scorecard renderer, route, file or download link remains. `POST /runs`
+returns JSON with three CSV links, including for `Accept: text/html`; its `scorecard` field
+is removed. Bare `GET /runs/{run_id}` and the dedicated scorecard route are removed;
+the CSV filename validator refuses `scorecard.html`. This supersedes all older standalone
+HTML/four-output requirements below. Operations 0.2.0 removes `report.html` and changes the
+public renderer to three CSV outputs; shared 0.1.3, CSV columns and portal views are unchanged.
+Existing immutable operations versions remain historical artifacts. Legacy HTML cleanup
+remains available for old output directories. See [output meanings](outputs.md).
+
+## Async manual execution amendment — 2026-10-13
+
+Browser triggers persist a durable job and return immediately. A dedicated admin run-worker
+executes the same pipeline independently of the HTTP request; the team workspace polls job status
+and displays the completed result. See [async-runs.md](async-runs.md) for failure/recovery semantics.
+Admin execution/report commands write three CSVs; completed results appear in the team workspace.
+The pipeline steps below retain their analysis, persistence and publication meanings.
+## Run lifecycle amendment — 2026-10-13
+
+New manual form, JSON and CLI runs select a Monday 00:00 UTC end; omission uses the
+latest completed Monday. The start is the previous Monday at 00:00 UTC, inclusive; the
+end is exclusive. Historical arbitrary-window analysis remains renderable. Admin removes
+the publication gap override and rejects forged overrides. Permanent run deletion removes
+SQL run-owned rows transactionally (including decisions in a scoped deletion allowance, with
+migration 009 and a checked parent foreign key), then cleans configured report files. Shared caches remain. Active work is
+refused; scheduler enrollment remains. See design section 7.12 and decision 004 for scope,
+failure handling and the explicit exception to retained audit history.
+
+Manual HTTP/API and CLI runs share the existing SQL session execution lock with weekly
+scheduling and deletion, from before scanning through persistence and report writing.
+Standalone CLI reports hold it before run-id/team lookup through the final file write.
+Model-off runs hold it too. Its separate connection survives data commits; contention is
+refused promptly and errors release the lock. Updated CLI clients and the app roll out together.
+
 ## Source ownership amendment — 2026-10-12
 
 Admin owns execution, migrations, weekly jobs, registry and library builds under `alerts_bi_admin.engine`; commands use `alerts-bi-admin`. The previous runs ownership and runtime-wheel references below are historical. Product behavior, wire payloads, SQL contracts and outputs are unchanged. See [retirement and cutover](runs-retirement.md).
@@ -199,9 +241,9 @@ The tool writes the run to SQL Server as:
 The stored categories remain explicit: `flagged_by_rule`, `flagged_by_llm`, `needs_review`, `assessed_good`, `unassessed`, and `phase2_gaps`. “Good” is never inferred by subtracting flagged alerts from total alerts.
 The run-level identity states are mutually exclusive: `rule_flagged`, `llm_flagged`, `needs_review`, `assessed_good`, and `unassessed`. `needs_review`, `assessed_good`, and `unassessed` are identity counts; phase-2 gaps remain orthogonal.
 
-## 9. Render the team scorecard
+## 9. Display the completed run and render CSV exports
 
-The HTML scorecard and CSV exports are generated from SQL Server, not recomputed from Elasticsearch. They show the selected team's:
+The admin workspace and CSV exports read SQL Server, without recomputing from Elasticsearch. They show the selected team's:
 
 - Seven-day volume and daily breakdown.
 - Deterministic and LLM quality results.
@@ -211,7 +253,7 @@ The HTML scorecard and CSV exports are generated from SQL Server, not recomputed
 - Migration phase and v2 readiness.
 - Node-name and key-inflation diagnostics.
 
-The self-contained HTML also shows run/version metadata, supplied panel IDs, rule/principle breakdown, and the limitations of the single-week snapshot. It contains no cross-run comparison, leaderboard, or combined v1/v2 volume conclusion. The three exports are exactly `daily_metrics.csv`, `rule_counts.csv`, and `alert_worklist.csv`. Their ordering is deterministic; CSV retains full values and neutralizes spreadsheet-formula prefixes, while the HTML escapes all alert content. An interactive frontend is post-MVP.
+The existing admin workspace shows run/version metadata, supplied panel IDs, rule/principle breakdown and the limitations of the single-week snapshot. The three exports are exactly `daily_metrics.csv`, `rule_counts.csv`, and `alert_worklist.csv`. Ordering is deterministic; CSV retains full values and neutralizes spreadsheet-formula prefixes. All alert content displayed in the workspace is escaped. No standalone HTML report is produced.
 
 ## 10. Publish and read (design section 7.10)
 

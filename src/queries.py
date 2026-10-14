@@ -16,6 +16,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from alerts_bi_shared.db.connection import Database
+from alerts_bi_shared.db.paging import cursor_for, order_by, scope_key, seek
 
 from .application_filter import ALL_APPLICATIONS, ApplicationFilter, predicate
 
@@ -159,9 +160,9 @@ def team_reviews(
     )
     reviews = _group_reviews(rows)
     options = db.query(
-        "SELECT DISTINCT a.application FROM portal_alerts AS a "
+        "SELECT DISTINCT a.application FROM portal_run_summaries AS a "
         "JOIN portal_reviews AS r ON r.run_id = a.run_id "
-        "WHERE r.team_id = :team_id ORDER BY a.application ASC",
+        "WHERE r.team_id = :team_id AND a.scope_kind='application' ORDER BY a.application ASC",
         {"team_id": team_id},
     )
     applications = replace(applications, options=tuple(str(r["application"]) for r in options))
@@ -170,18 +171,20 @@ def team_reviews(
     clause, params = predicate(applications, "a.application")
     scoped = db.query(
         f"""
-        SELECT a.run_id, a.alert_schema, SUM(a.row_count) AS events,
-               COUNT(*) AS distinct_alerts,
-               SUM(CASE WHEN a.quality_state = 'rule_flagged' THEN 1 ELSE 0 END) AS rule_flagged,
-               SUM(CASE WHEN a.quality_state = 'llm_flagged' THEN 1 ELSE 0 END) AS llm_flagged,
-               SUM(CASE WHEN a.quality_state = 'needs_review' THEN 1 ELSE 0 END) AS needs_review,
-               SUM(CASE WHEN a.quality_state = 'assessed_good' THEN 1 ELSE 0 END) AS assessed_good,
-               SUM(CASE WHEN a.quality_state = 'unassessed' THEN 1 ELSE 0 END) AS unassessed,
-               SUM(CASE WHEN a.readiness_rule_ids <> '' THEN 1 ELSE 0 END) AS readiness_gaps,
-               SUM(CASE WHEN a.attention_rank < 4 THEN 1 ELSE 0 END) AS needs_attention
-        FROM portal_alerts AS a JOIN portal_reviews AS r ON r.run_id = a.run_id
-        WHERE r.team_id = :team_id AND {clause}
-        GROUP BY a.run_id, a.alert_schema ORDER BY a.run_id, a.alert_schema
+        SELECT a.run_id,j.[key] AS alert_schema,
+               SUM(CAST(JSON_VALUE(j.value,'$.events') AS BIGINT)) AS events,
+               SUM(CAST(JSON_VALUE(j.value,'$.distinct_alerts') AS BIGINT)) AS distinct_alerts,
+               SUM(CAST(JSON_VALUE(j.value,'$.states.rule_flagged') AS BIGINT)) AS rule_flagged,
+               SUM(CAST(JSON_VALUE(j.value,'$.states.llm_flagged') AS BIGINT)) AS llm_flagged,
+               SUM(CAST(JSON_VALUE(j.value,'$.states.needs_review') AS BIGINT)) AS needs_review,
+               SUM(CAST(JSON_VALUE(j.value,'$.states.assessed_good') AS BIGINT)) AS assessed_good,
+               SUM(CAST(JSON_VALUE(j.value,'$.states.unassessed') AS BIGINT)) AS unassessed,
+               SUM(CAST(JSON_VALUE(j.value,'$.readiness_gaps') AS BIGINT)) AS readiness_gaps,
+               SUM(CAST(JSON_VALUE(j.value,'$.needs_attention') AS BIGINT)) AS needs_attention
+        FROM portal_run_summaries AS a JOIN portal_reviews AS r ON r.run_id=a.run_id
+        CROSS APPLY OPENJSON(a.payload,'$.schemas') j
+        WHERE r.team_id=:team_id AND a.scope_kind='application' AND {clause}
+        GROUP BY a.run_id,j.[key] ORDER BY a.run_id,j.[key]
         """,
         {"team_id": team_id, **params},
     )
@@ -301,6 +304,8 @@ class WorklistPage:
     total: int
     page: int
     page_size: int
+    next_cursor: str | None = None
+    previous_cursor: str | None = None
 
     @property
     def pages(self) -> int:
@@ -342,7 +347,7 @@ def _filters(
         params["state"] = state
     if rule is not None and RULE_FILTER.match(rule):
         where.append(
-            "(',' + core_rule_ids + ',' + readiness_rule_ids + ',') LIKE '%,' + :rule + ',%'"
+            "finding_id IN (SELECT finding_id FROM portal_rule_membership WHERE run_id=:run_id AND rule_id=:rule)"
         )
         params["rule"] = rule
     return where, params
@@ -364,7 +369,7 @@ def worklist_counts(
     row = db.query_one(
         "SELECT COUNT(*) AS total, "
         "COALESCE(SUM(CASE WHEN attention_rank < 4 THEN 1 ELSE 0 END), 0) AS attention "
-        f"FROM portal_alerts WHERE {' AND '.join(where)}",
+        f"FROM portal_alert_list WHERE {' AND '.join(where)}",
         params,
     )
     return {
@@ -384,6 +389,7 @@ def worklist(
     state: str | None = None,
     rule: str | None = None,
     applications: ApplicationFilter = ALL_APPLICATIONS,
+    cursor: str | None = None,
 ) -> WorklistPage:
     """One page of a published week's alerts, paginated in SQL.
 
@@ -398,23 +404,56 @@ def worklist(
         where.append("attention_rank < 4")
     clause = " AND ".join(where)
 
-    count = db.query_one(f"SELECT COUNT(*) AS total FROM portal_alerts WHERE {clause}", params)
+    count = db.query_one(f"SELECT COUNT(*) AS total FROM portal_alert_list WHERE {clause}", params)
     total = int(count["total"]) if count else 0
     pages = max(1, -(-total // page_size))
     page = min(max(page, 1), pages)
 
-    rows = db.query(
-        f"""
-        SELECT {_ALERT_COLUMNS}
-        FROM portal_alerts
-        WHERE {clause}
-        ORDER BY attention_rank ASC, row_count DESC, alert_schema ASC, application ASC,
-                 key_field ASC
-        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
-        """,
-        {**params, "offset": (page - 1) * page_size, "limit": page_size},
+    columns = (
+        ("attention_rank", False),
+        ("row_count", True),
+        ("alert_schema", False),
+        ("application", False),
+        ("key_field", False),
     )
-    return WorklistPage([_alert(row) for row in rows], total, page, page_size)
+    scope = scope_key([run_id, clause, params, page_size])
+    after, seek_params, reverse = seek(cursor, scope, columns)
+    select = (
+        f"SELECT TOP (:limit) * FROM portal_alert_list WHERE {clause} AND {after} ORDER BY {order_by(columns, reverse)}"
+        if after
+        else (
+            f"SELECT * FROM portal_alert_list WHERE {clause} ORDER BY {order_by(columns)} OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        )
+    )
+    rows = db.query(
+        select, {**params, **seek_params, "offset": (page - 1) * page_size, "limit": page_size}
+    )
+    if reverse:
+        rows.reverse()
+    # Evidence is fetched for this page only. Navigation/counts never touch wide documents.
+    identities = json.dumps([[r["alert_schema"], r["application"], r["key_field"]] for r in rows])
+    details = (
+        db.query(
+            f"SELECT {_ALERT_COLUMNS} FROM portal_alerts a WHERE run_id=:run_id AND EXISTS ("
+            "SELECT 1 FROM OPENJSON(:identities) WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(512) '$[2]') i "
+            "WHERE i.s=a.alert_schema AND i.a=a.application AND i.k=a.key_field)",
+            {"run_id": run_id, "identities": identities},
+        )
+        if rows
+        else []
+    )
+    by_identity = {(r["alert_schema"], r["application"], r["key_field"]): r for r in details}
+    alerts = [
+        _alert(by_identity[(r["alert_schema"], r["application"], r["key_field"])]) for r in rows
+    ]
+    return WorklistPage(
+        alerts,
+        total,
+        page,
+        page_size,
+        cursor_for(scope, rows[-1], columns) if rows else None,
+        cursor_for(scope, rows[0], columns, previous=True) if rows else None,
+    )
 
 
 # ------------------------------------------------------------------ one alert
@@ -472,15 +511,27 @@ def latest_decisions(
         return {}
     rows = db.query(
         """
+        WITH ranked AS (
         SELECT d.alert_schema, d.application, d.key_field, d.finding_id, d.state, d.note,
-               d.decided_at, d.decided_by
+               d.decided_at, d.decided_by,
+               ROW_NUMBER() OVER(PARTITION BY d.alert_schema,d.application,d.key_field,d.finding_id
+                 ORDER BY d.decided_at DESC,d.decision_id DESC) AS recency
         FROM portal_decisions AS d
-        JOIN portal_alerts AS a
+        JOIN portal_alert_list AS a
           ON a.alert_schema = d.alert_schema AND a.application = d.application
          AND a.key_field = d.key_field AND a.run_id = :run_id
-        ORDER BY d.decided_at ASC, d.decision_id ASC
+        WHERE EXISTS (SELECT 1 FROM OPENJSON(:identities)
+          WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(512) '$[2]') i
+          WHERE i.s=d.alert_schema AND i.a=d.application AND i.k=d.key_field)
+        ) SELECT alert_schema,application,key_field,finding_id,state,note,decided_at,decided_by
+        FROM ranked WHERE recency=1
         """,
-        {"run_id": run_id},
+        {
+            "run_id": run_id,
+            "identities": json.dumps(
+                [[a.alert_schema, a.application, a.key_field] for a in alerts]
+            ),
+        },
     )
     wanted = {(a.alert_schema, a.application, a.key_field) for a in alerts}
     latest: dict[tuple[str, str, str], dict[str, Decision]] = {}
