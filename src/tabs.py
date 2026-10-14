@@ -32,7 +32,7 @@ from alerts_bi_shared.insights.stored import fact, patterns
 from alerts_bi_shared.ui.charts import ChartPoint, Segment, line_chart, stacked_bar
 from alerts_bi_shared.ui.explain import (
     decision_question,
-    dominant_r6_pattern,
+    dominant_r6_pattern_totals,
     format_instant,
     format_week,
     principle_next_step,
@@ -467,7 +467,7 @@ def _cell(total: RuleTotal | None, *, events: bool = True) -> str:
 
 
 def _r6_pattern(summary: TeamSummary) -> str | None:
-    return dominant_r6_pattern((p, pair[1]) for p, pair in patterns(summary.inputs).items())
+    return dominant_r6_pattern_totals(patterns(summary.inputs))
 
 
 def _changes(selected: Review, summary: TeamSummary) -> str:

@@ -56,7 +56,7 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.4 wheel. Standalone imports and schema readiness remain intact.
+`alerts-bi-shared` 0.1.5 wheel. Standalone imports and schema readiness remain intact.
 
 Summaries use exact stored aggregates and bounded examples. Fix lists use seek pagination
 and fetch evidence only for the visible page; existing numbered-page links still work.
