@@ -90,4 +90,9 @@ independently installable wheel and source archive. Docker installs that wheel.
 Run `poetry check --lock` to validate the committed lockfile. `docs/upstream/`
 is a pinned historical snapshot; current service commands are listed here.
 
+When updating the vendored shared wheel, finish the artifact first, then run
+`poetry update alerts-bi-shared --lock --no-cache`. The unit suite checks the actual
+archive hash against the lock. Also verify `poetry sync --only main --no-root` in a
+fresh environment: `poetry check --lock` does not validate the vendored file's bytes.
+
 Shared-library source and migration/mock tooling are maintained in alerts-bi-admin. Portal remains independently installable with its pinned shared wheel and requires no admin source, engine, operations library or registry. See docs/upstream/runs-retirement.md for the coordinated source retirement.

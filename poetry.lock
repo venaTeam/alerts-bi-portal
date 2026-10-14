@@ -8,7 +8,7 @@ optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "alerts_bi_shared-0.1.4-py3-none-any.whl", hash = "sha256:315bcee09d4fd1fbd3feaf924c50005030bdf6c32b5e62cca34692f55ce2b696"},
+    {file = "alerts_bi_shared-0.1.4-py3-none-any.whl", hash = "sha256:b9fa13e06ff268c5bea113fddb6ac50307ab8e3216f1024880a165a2815b9d3c"},
 ]
 
 [package.dependencies]
