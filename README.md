@@ -56,10 +56,11 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.6 wheel. Standalone imports and schema readiness remain intact.
-Shared 0.1.6 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS, refuses
-`SQL_TRUST_SERVER_CERTIFICATE=false`, and logs `sql.unencrypted` once at startup when
-encryption is off.
+`alerts-bi-shared` 0.1.7 wheel. Standalone imports and schema readiness remain intact.
+Shared 0.1.7 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS (the server
+certificate is not validated, so it stops passive reading but not an active interceptor),
+rejects unknown `SQL_ENCRYPT` values and `SQL_TRUST_SERVER_CERTIFICATE=false` at startup, and
+logs `sql.unencrypted` once at startup when encryption is off.
 
 Summaries use exact stored aggregates and bounded examples. Fix lists use seek pagination
 and fetch evidence only for the visible page; existing numbered-page links still work.

@@ -2,13 +2,13 @@
 
 [[package]]
 name = "alerts-bi-shared"
-version = "0.1.6"
+version = "0.1.7"
 description = "Alerts BI common values, SQL connection, summaries and pure presentation"
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "alerts_bi_shared-0.1.6-py3-none-any.whl", hash = "sha256:7ff20c81cfc1cb2a7c38d462ac0c1892bd9e8308426465c776971b0257cc29c2"},
+    {file = "alerts_bi_shared-0.1.7-py3-none-any.whl", hash = "sha256:853a985002c337df919b04ba29fbc2df606a882b22ae3ac17644b1e2adf59983"},
 ]
 
 [package.dependencies]
@@ -17,7 +17,7 @@ sqlalchemy = ">=2.0,<3"
 
 [package.source]
 type = "file"
-url = "vendor/alerts_bi_shared-0.1.6-py3-none-any.whl"
+url = "vendor/alerts_bi_shared-0.1.7-py3-none-any.whl"
 
 [[package]]
 name = "annotated-doc"
@@ -1033,4 +1033,4 @@ standard = ["httptools (>=0.8.0)", "python-dotenv (>=0.13)", "pyyaml (>=5.1)", "
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "cfee4b701a885ddd113d984ec4d429ff0788ac5b30b9d5ed30521b8e9f5f76eb"
+content-hash = "7cc42cbfd1139025b1d91a2ccfef508a50ec2742a4b4d326f355f59e0bf4191e"

@@ -54,3 +54,6 @@ def test_portal_requires_sql_tls_when_configured(
     monkeypatch.setenv("SQL_TRUST_SERVER_CERTIFICATE", "false")
     with pytest.raises(ValueError, match="cannot validate the SQL Server certificate"):
         build_portal(load_portal_settings())
+    monkeypatch.setenv("SQL_ENCRYPT", "require")
+    with pytest.raises(ValueError, match="env SQL_ENCRYPT must be one of"):
+        load_portal_settings()
