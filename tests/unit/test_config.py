@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 from alerts_bi_shared.config.sql import load_sql_config
+from alerts_bi_shared.db.connection import encryption_connect_args
+from src.app import build_portal
 from src.config import load_portal_settings
 
 
@@ -40,3 +42,18 @@ def test_process_configuration_wins_over_dotenv(
     monkeypatch.setenv("SQL_DATABASE", "process_database")
     (tmp_path / ".env").write_text("SQL_DATABASE=ignored_database\n", encoding="utf-8")
     assert load_portal_settings().database == "process_database"
+
+
+def test_portal_requires_sql_tls_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SQL_ENCRYPT", "true")
+    # The locked pymssql applies encryption; an older driver would be refused here.
+    assert encryption_connect_args(load_portal_settings().sql) == {"encryption": "require"}
+    monkeypatch.setenv("SQL_TRUST_SERVER_CERTIFICATE", "false")
+    with pytest.raises(ValueError, match="cannot validate the SQL Server certificate"):
+        build_portal(load_portal_settings())
+    monkeypatch.setenv("SQL_ENCRYPT", "require")
+    with pytest.raises(ValueError, match="env SQL_ENCRYPT must be one of"):
+        load_portal_settings()
