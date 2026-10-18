@@ -14,8 +14,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
+from alerts_bi_shared.team_urls import encode_team_id
 from alerts_bi_shared.ui.explain import format_date, format_week
 from alerts_bi_shared.ui.html import PHASE_STEPS, SCHEMA_NAMES, h, safe_link
 
@@ -72,7 +73,7 @@ def plural(count: int, word: str) -> str:
 
 
 def team_url(team_id: str) -> str:
-    return "/teams/" + quote(team_id, safe="")
+    return "/teams/" + encode_team_id(team_id)
 
 
 def week_url(team_id: str, week: date, **query: Any) -> str:

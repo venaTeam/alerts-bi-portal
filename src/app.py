@@ -27,6 +27,7 @@ from alerts_bi_shared.db.connection import Database, WebDatabasePool
 from alerts_bi_shared.insights import TeamSummary
 from alerts_bi_shared.insights.summary import summarize
 from alerts_bi_shared.logging_setup import log, redact_error
+from alerts_bi_shared.team_urls import decode_team_id
 from alerts_bi_shared.versions import APP_VERSION
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -83,6 +84,13 @@ def client_allowed(host: str | None, networks: tuple[IpNetwork, ...]) -> bool:
     except ValueError:
         return False
     return any(address in network for network in networks)
+
+
+def _team_id_from_path(value: str) -> str:
+    try:
+        return decode_team_id(value)
+    except ValueError as exc:
+        raise HTTPException(404, "Invalid team URL.") from exc
 
 
 def build_portal(settings: PortalSettings) -> FastAPI:
@@ -247,6 +255,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state: StateFilter = "all",
         rule: RuleFilter = "",
     ) -> Response:
+        team_id = _team_id_from_path(team_id)
         return _tab(team_id, None, "overview", request, legacy=True)
 
     @app.get("/teams/{team_id}/weeks")
@@ -258,6 +267,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
     ) -> Response:
         """The old week-picker form. The week menu is plain links now; this keeps old
         bookmarks working."""
+        team_id = _team_id_from_path(team_id)
         try:
             chosen = date.fromisoformat(week)
         except ValueError:
@@ -280,6 +290,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state: StateFilter = "all",
         rule: RuleFilter = "",
     ) -> Response:
+        team_id = _team_id_from_path(team_id)
         return _tab(team_id, week, "overview", request, legacy=True)
 
     @app.get("/teams/{team_id}/weeks/{week}/fix", response_class=HTMLResponse)
@@ -293,6 +304,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         state: StateFilter = "all",
         rule: RuleFilter = "",
     ) -> HTMLResponse:
+        team_id = _team_id_from_path(team_id)
         schema_filter = schema if schema in ("v1", "v2") else None
         state_filter = state if state in queries.QUALITY_STATES else None
         rule_filter = rule or None
@@ -338,6 +350,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
 
     def _register(tab: str) -> None:
         def one_tab(team_id: str, week: str, request: Request) -> Response:
+            team_id = _team_id_from_path(team_id)
             return _tab(team_id, week, tab, request)
 
         app.get(
@@ -358,6 +371,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         application: Annotated[str, Query(max_length=256)],
         key: Annotated[str, Query(max_length=512)],
     ) -> HTMLResponse:
+        team_id = _team_id_from_path(team_id)
         with database() as db:
             reviews = _reviews(db, team_id, request)
             selected = _week(reviews, week)

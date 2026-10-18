@@ -282,7 +282,7 @@ def test_the_problem_filter_explains_the_problem_and_its_fix() -> None:
 def test_the_filters_keep_each_other_and_are_links() -> None:
     page = fix(state="rule_flagged", rule="R1")
     assert "schema=v1&amp;state=rule_flagged&amp;rule=R1#alerts" in page
-    assert 'href="/teams/team%3Cx%3E/weeks/2026-09-28/fix?state=rule_flagged#alerts"' in page
+    assert 'href="/teams/~7465616d3c783e/weeks/2026-09-28/fix?state=rule_flagged#alerts"' in page
     assert page.count("<form") == 1, "only the global application picker is a form"
     assert 'method="get"' in page
 

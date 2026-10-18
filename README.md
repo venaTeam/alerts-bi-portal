@@ -56,8 +56,8 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.7 wheel. Standalone imports and schema readiness remain intact.
-Shared 0.1.7 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS (the server
+`alerts-bi-shared` 0.1.8 wheel. Standalone imports and schema readiness remain intact.
+TLS enforcement introduced in shared 0.1.7 and retained in 0.1.8 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS (the server
 certificate is not validated, so it stops passive reading but not an active interceptor),
 rejects unknown `SQL_ENCRYPT` values and `SQL_TRUST_SERVER_CERTIFICATE=false` at startup, and
 logs `sql.unencrypted` once at startup when encryption is off.
@@ -100,3 +100,12 @@ archive hash against the lock. Also verify `poetry sync --only main --no-root` i
 fresh environment: `poetry check --lock` does not validate the vendored file's bytes.
 
 Shared-library source and migration/mock tooling are maintained in alerts-bi-admin. Portal remains independently installable with its pinned shared wheel and requires no admin source, engine, operations library or registry. See docs/upstream/runs-retirement.md for the coordinated source retirement.
+
+Team links preserve legacy slugs and encode other IDs as a single `~`-prefixed UTF-8 hex
+segment. Shared 0.1.8 supplies the codec for all week, tab and alert links. Deploy with
+admin migration `017_case_sensitive_teams` so case-distinct team IDs stay separate in
+published views. Migration and registry rollout belong to admin. An old admin image cannot
+initialize against revision 017: recovery requires a migration-aware compatible image or
+an explicitly authorized pre-migration database restore with matching image, manifests and
+registry. A restore loses subsequent writes. Do not roll back portal routing while newly
+encoded links remain in use; see `docs/upstream/openshift-deployment.md`.
