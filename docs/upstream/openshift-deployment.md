@@ -1,6 +1,7 @@
 # OpenShift deployment: unified admin and read-only portal
 
-Current topology, approved 2026-10-12. Examples are unexecuted rollout preparation, not cluster
+Current topology, approved 2026-10-12; amended 2026-10-17 to remove run output files and their
+mounts. Examples are unexecuted rollout preparation, not cluster
 validation. Admin is the only operator/analysis image. The separate portal remains read-only.
 See [retirement cutover and rollback](runs-retirement.md) before changing existing deployments.
 
@@ -24,7 +25,6 @@ Do not commit generated secrets or apply the placeholder manifests unchanged.
 | ADMIN_HOST=127.0.0.1, ADMIN_PORT=8200, ADMIN_USER_HEADER=X-Forwarded-User | Authenticated admin listener only |
 | ADMIN_SECRET | Private random value of at least 32 characters, signs actor-bound CSRF tokens |
 | ADMIN_DATABASE | Optional UI/worker/migration database override; unset uses SQL_DATABASE |
-| ADMIN_OUT_DIR=/app/out | Writable HTTP execution output; jobs use --out |
 | ADMIN_REGISTRY_PATH or --registry | Mounted admin-owned registry at /etc/alerts-bi/teams.json |
 | COOKIE_SECRET | Existing proxy session secret; keep its supported encoding and rotation procedure |
 | PORTAL_HOST, PORTAL_PORT, PORTAL_ALLOWED_NETWORKS | Existing standalone reader configuration, port 8100 |
@@ -41,7 +41,31 @@ Accepted 2026-10-13: the admin Deployment now runs `db setup` in a regular `migr
 init container before the UI, manual worker and proxy start. It uses the same admin image
 digest, SQL settings and credentials, selecting ADMIN_DATABASE when nonempty and otherwise
 SQL_DATABASE (the CLI default is alerts_bi_dev). It applies only missing revisions after
-checking the immutable ledger; current head is 011_run_job_keys. No data reset occurs.
+checking the immutable ledger; current head is 015_case_sensitive_applications. No data
+reset occurs.
+
+015_case_sensitive_applications (2026-10-18) rebuilds the primary keys and indexes on every
+stored `application` column in one transaction. A failure rolls back completely. Its duration
+grows with the stored findings, verdicts and read models, and its schema locks make portal
+reads of the eight refreshed views, and every query on the seven tables, wait until it
+commits. Once it is applied, an earlier admin image's `migrate` init container stops with
+`Can't locate revision identified by '015_case_sensitive_applications'`, and the revision
+refuses to downgrade. Restoring the database is then the only way back to an earlier image.
+Before the rollout:
+
+1. Take a database backup and confirm that it restores.
+2. Record the row counts of `alert_findings`, `llm_verdicts` and `run_alert_list` and the
+   transaction log's free space, and size the window from them. The rebuild rewrites those
+   tables once and logs the work.
+3. Schedule a maintenance window outside the weekly job's schedule. Tell portal readers that
+   pages may wait during the window.
+
+Nothing cuts the rebuild short. The migration connection sets no SQL query timeout:
+`SQL_REQUEST_TIMEOUT_MS` applies to application queries, not to `db setup`. The admin
+Deployment sets no `activeDeadlineSeconds`. Keep it that way, and add no init-container deadline
+shorter than the sized window. If the pod is killed anyway, 015 rolls back and the next start
+repeats the whole lock window. When the sizing suggests a long rebuild, stop the UI and worker
+and run deploy/migrate.yaml by hand instead.
 
 Keep one replica and Recreate: an upgrade terminates the old UI/worker before creating the
 new pod. A migration failure keeps the application containers unstarted and OpenShift retries
@@ -131,25 +155,20 @@ spec:
           env:
             - {name: ADMIN_HOST, value: "127.0.0.1"}
             - {name: ADMIN_PORT, value: "8200"}
-            - {name: ADMIN_OUT_DIR, value: "/app/out"}
           envFrom:
             - configMapRef: {name: alerts-bi-config}
             - secretRef: {name: alerts-bi-secrets}
             - secretRef: {name: alerts-bi-admin-secrets}
           volumeMounts:
             - {name: registry, mountPath: /etc/alerts-bi, readOnly: true}
-            - {name: output, mountPath: /app/out}
         - name: run-worker
           image: ADMIN_IMAGE_DIGEST
           command: ["alerts-bi-admin", "run-worker", "--registry", "/etc/alerts-bi/teams.json"]
-          env:
-            - {name: ADMIN_OUT_DIR, value: "/app/out"}
           envFrom:
             - configMapRef: {name: alerts-bi-config}
             - secretRef: {name: alerts-bi-secrets}
           volumeMounts:
             - {name: registry, mountPath: /etc/alerts-bi, readOnly: true}
-            - {name: output, mountPath: /app/out}
         - name: oauth-proxy
           image: OAUTH_PROXY_IMAGE_DIGEST
           args:
@@ -167,7 +186,6 @@ spec:
             - {name: proxy-tls, mountPath: /etc/tls/private}
             - {name: proxy-secrets, mountPath: /etc/proxy/secrets}
       volumes:
-        - {name: output, emptyDir: {}}
         - {name: registry, configMap: {name: alerts-bi-registry}}
         - {name: proxy-tls, secret: {secretName: alerts-bi-admin-tls}}
         - {name: proxy-secrets, secret: {secretName: alerts-bi-admin-secrets}}
@@ -211,8 +229,12 @@ subjects:
   - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: standardization-team}
 ```
 
-The existing pod security policy must grant the non-root application write access to /app/out
-and mounted output volumes. SQL remains authoritative; output files can be regenerated. Keep
+Runs write no files, so the application needs no writable output volume; CSV downloads render
+from SQL. Apply these manifests with the image that contains this change, removing any existing
+ADMIN_OUT_DIR setting, output mounts and the weekly `--out`. Earlier images write files after
+every run, so a rollback redeploys the previous manifests with the previous image (ADMIN_OUT_DIR,
+the output emptyDir mounts and the weekly `--out /app/out/weekly`). CSVs left on an old emptyDir
+are discarded with its pod; no cleanup is needed. Keep
 the image/registry access policies and resource limits appropriate to the existing deployment.
 
 ## One weekly scheduler
@@ -244,16 +266,14 @@ spec:
           containers:
             - name: weekly
               image: ADMIN_IMAGE_DIGEST
-              command: ["alerts-bi-admin", "weekly", "--registry", "/etc/alerts-bi/teams.json", "--out", "/app/out/weekly"]
+              command: ["alerts-bi-admin", "weekly", "--registry", "/etc/alerts-bi/teams.json"]
               envFrom:
                 - configMapRef: {name: alerts-bi-config}
                 - secretRef: {name: alerts-bi-secrets}
               volumeMounts:
                 - {name: registry, mountPath: /etc/alerts-bi, readOnly: true}
-                - {name: output, mountPath: /app/out}
           volumes:
             - {name: registry, configMap: {name: alerts-bi-registry}}
-            - {name: output, emptyDir: {}}
 ```
 
 The example starts suspended. Enable only one scheduler after verifying `weekly --dry-run` and

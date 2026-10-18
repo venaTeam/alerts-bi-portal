@@ -32,8 +32,10 @@ is the explicit whole-run exception. Portal views and shared interfaces
 are unchanged; the later HTML-removal amendment changes operations to 0.2.0. `trigger-openapi.json` now records the approved Monday/default description.
 
 Review fixes add 011_run_job_keys for collation-independent exact submission identity.
-Migration 009 remains deletion; 010 remains jobs. Recovery regenerates all three CSVs
-from committed SQL before reporting clean completion. See docs/async-runs.md for rollout.
+Migration 009 remains deletion; 010 remains jobs. Since 2026-10-17 recovery completes a
+committed result without writing CSV files; downloads render from SQL. The `POST /runs`
+response is not part of trigger-openapi.json, so removing its `out_dir` field changes no
+contract JSON. See docs/async-runs.md for rollout.
 
 console-openapi.json is generated from the actual authenticated console and includes the
 run-jobs request body, required Idempotency-Key/CSRF headers and typed status responses.
@@ -45,3 +47,9 @@ modifying 001–013: the run_backfills table, run_jobs.backfill_id, and the queu
 job states. console-http.json records the backfill routes, claim order and weekly wait, and
 console-openapi.json is regenerated with BackfillOut and the extended job states. Portal views,
 CSV outputs and shared/operations interfaces are unchanged.
+
+The 2026-10-18 exact-application amendment (docs/alerts_bi_design.md) appends migration
+015_case_sensitive_applications without modifying 001–014. It stores every `application`
+column with binary collation and refreshes the portal views that expose it. View columns and
+types in sql-views.json, CSV outputs, console routes and shared/operations interfaces are
+unchanged. Comparisons on `application` through the views are now exact.
