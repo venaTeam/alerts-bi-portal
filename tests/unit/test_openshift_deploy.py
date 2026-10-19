@@ -173,12 +173,68 @@ def test_the_allowlist_check_reads_the_value_file(
     ]
     for text, problem in [
         ("PORTAL_IMAGE=x\n", "is missing"),
-        ("PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8\nPORTAL_ROUTE_ALLOWLIST=\n", "is set 2 times"),
+        ("PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8\nPORTAL_ROUTE_ALLOWLIST=\n", "assigned on lines 1, 2"),
         ("PORTAL_ROUTE_ALLOWLIST=\n", "is empty"),
     ]:
-        values.write_text(text, "utf-8")
+        values.write_bytes(text.encode("utf-8"))
         assert checker.main(["check", str(values)]) == 1
         assert problem in capsys.readouterr().out
+
+
+def test_the_allowlist_check_reads_parameters_as_oc_does() -> None:
+    # oc 4.14 pkg/helpers/newapp/app/env.go: keys are trimmed, `export` and `KEY: value` are
+    # accepted, quotes and trailing comments are removed, CR LF is a line end, last one wins.
+    text = (
+        "# comment\nA=1\n  B = 2 \r\nexport C='x y'\nD: 4\nE=\"5 # kept\"\nF=6 # dropped\n\nA=7\n"
+    )
+    assert _allowlist_checker().oc_parameters(text) == {
+        "A": "7",
+        "B": "2",
+        "C": "x y",
+        "D": "4",
+        "E": "5 # kept",
+        "F": "6",
+    }
+
+
+VALID = "PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Review case: oc keeps the last, malformed value; a line-prefix check saw only the first.
+        f"{VALID}\n PORTAL_ROUTE_ALLOWLIST=999.0.0.1\n",
+        f"{VALID}\nexport PORTAL_ROUTE_ALLOWLIST=999.0.0.1\n",
+        f"{VALID}\nPORTAL_ROUTE_ALLOWLIST: 999.0.0.1\n",
+        f"{VALID}\nPORTAL_ROUTE_ALLOWLIST =999.0.0.1\n",
+        f"{VALID}\n{VALID}\n",
+        # One assignment in a form oc rewrites, even with a valid list.
+        " PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8\n",
+        "export PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8\n",
+        "PORTAL_ROUTE_ALLOWLIST: 10.0.0.0/8\n",
+        'PORTAL_ROUTE_ALLOWLIST="10.0.0.0/8"\n',
+        "PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8 # office\n",
+        # Lines oc cannot read make it fail, so they are refused before oc runs.
+        f"{VALID}\nnot an assignment\n",
+        f"{VALID}\n\tPORTAL_ROUTE_ALLOWLIST=999.0.0.1\n",
+    ],
+)
+def test_the_allowlist_check_refuses_duplicate_or_rewritten_assignments(text: str) -> None:
+    assert _allowlist_checker().file_problems(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{VALID}\n",
+        f"{VALID}",
+        f"PORTAL_IMAGE=x\r\n{VALID}\r\n",
+        f"# PORTAL_ROUTE_ALLOWLIST=999.0.0.1\n{VALID}\n",
+    ],
+)
+def test_the_allowlist_check_accepts_one_plain_assignment(text: str) -> None:
+    assert _allowlist_checker().file_problems(text) == []
 
 
 def test_template_sets_every_portal_setting_the_code_reads() -> None:
