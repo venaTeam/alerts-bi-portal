@@ -1,7 +1,10 @@
 # OpenShift Template for the read-only alerts-bi-portal.
 #
-# Do not edit values here. Fill a copy of values.env.example and render with:
-#   oc process --local -f portal.yaml --param-file <portal-values.env> -o yaml | oc apply -n <NAMESPACE> -f -
+# Do not edit values here. Fill a copy of values.env.example. Do not apply this template by
+# hand: deploy only with the block in README.md section 5, which checks PORTAL_ROUTE_ALLOWLIST
+# (check_route_allowlist.py) and stops before rendering or applying a list the router would
+# drop. To inspect the objects without applying them, render only:
+#   oc process --local -f portal.yaml --param-file <portal-values.env> -o yaml
 # The complete procedure is in README.md next to this file. The portal needs the ConfigMap
 # alerts-bi-config and the Secret alerts-bi-secrets that the alerts-bi-admin deployment creates,
 # and a database already migrated by alerts-bi-admin.

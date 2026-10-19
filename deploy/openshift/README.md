@@ -46,7 +46,9 @@ You need:
 
 - `oc` 4.14 or later, logged in with the `edit` or `admin` role in the project where admin runs.
 - A POSIX shell (bash, or Git Bash on Windows). Every command below is bash.
-- `python3` 3.8 or later for the allowlist check in section 3 (standard library only).
+- `python3` 3.8.12 or later (3.9.5 or later on 3.9) for the allowlist check in section 3,
+  standard library only. The check refuses to run on earlier releases, whose `ipaddress`
+  accepts leading zeros the router refuses.
 - The `alerts-bi-portal` checkout at the release commit, and the portal image built by CI from
   that commit. To build by hand: `podman build -t <registry>/<repository>:<commit> .` from the
   repository root, then `podman push <registry>/<repository>:<commit>`.

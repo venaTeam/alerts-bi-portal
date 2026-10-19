@@ -177,6 +177,55 @@ def test_a_failing_step_stops_the_deploy_block_before_the_apply(
     assert [call.split()[0] for call in calls] == steps
 
 
+_APPLY = re.compile(r"\b(?:oc|kubectl)\s+(?:apply|replace|create\s+-f)\b")
+
+
+def test_only_the_guarded_deploy_block_applies_objects() -> None:
+    # Any other documented apply command, such as a usage line in portal.yaml, would skip the
+    # allowlist check; only README.md section 5 may apply, inside its `set -e` block.
+    files = [path for path in DEPLOY.iterdir() if path.is_file()] + [ROOT / "README.md"]
+    applies = {
+        path.relative_to(ROOT).as_posix(): len(_APPLY.findall(path.read_text("utf-8")))
+        for path in files
+    }
+    assert {name: count for name, count in applies.items() if count} == {
+        "deploy/openshift/README.md": 2
+    }
+    assert len(_APPLY.findall(_deploy_block())) == 2
+    assert "oc process --local -f portal.yaml" in (DEPLOY / "portal.yaml").read_text("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("version", "lenient"),
+    [
+        ((3, 8, 0), True),
+        ((3, 8, 10), True),
+        ((3, 8, 11), True),
+        ((3, 8, 12), False),
+        ((3, 9, 0), True),
+        ((3, 9, 4), True),
+        ((3, 9, 5), False),
+        ((3, 10, 0), False),
+        ((3, 12, 7), False),
+    ],
+)
+def test_the_check_knows_which_pythons_accept_leading_zeros(
+    version: tuple[int, ...], lenient: bool
+) -> None:
+    assert _allowlist_checker().lenient_ipaddress(version) is lenient
+
+
+def test_the_check_refuses_to_run_on_a_lenient_python(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checker = _allowlist_checker()
+    values = tmp_path / "portal-values.env"
+    values.write_bytes(f"{EXAMPLE_ALLOWLIST}\n".encode())
+    assert checker.main(["check", str(values)], version=(3, 8, 10)) == 1
+    assert "STOP: Python 3.8.10 accepts addresses the router refuses" in capsys.readouterr().out
+    assert checker.main(["check", str(values)], version=(3, 8, 12)) == 0
+
+
 @pytest.mark.parametrize(
     "value",
     [

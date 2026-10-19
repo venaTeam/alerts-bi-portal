@@ -15,8 +15,10 @@ ports that parser, refuses a file oc could not read, and also refuses any assign
 allowlist other than one plain `PORTAL_ROUTE_ALLOWLIST=<list>` line, so what is reviewed is
 exactly what is rendered.
 
-Usage: python3 check_route_allowlist.py <portal-values.env>. Python 3.8 or later, standard
-library only. Exit status 0 prints "allowlist ok"; 1 prints one STOP line per problem.
+Usage: python3 check_route_allowlist.py <portal-values.env>. Python 3.8.12 or later (3.9.5 or
+later on 3.9), standard library only: earlier releases' ipaddress accepts leading zeros the
+router refuses, so the check refuses to run on them. Exit status 0 prints "allowlist ok"; 1
+prints one STOP line per problem.
 """
 
 from __future__ import annotations
@@ -173,10 +175,24 @@ def file_problems(text: str) -> list[str]:
     return problems(oc_parameters(text)[KEY])
 
 
-def main(argv: list[str]) -> int:
+def lenient_ipaddress(version: tuple[int, ...]) -> bool:
+    """Whether this Python's ipaddress accepts IPv4 leading zeros (fixed in 3.8.12 and 3.9.5)."""
+    release = tuple(version[:3])
+    return release < (3, 8, 12) or (3, 9, 0) <= release < (3, 9, 5)
+
+
+def main(argv: list[str], version: tuple[int, ...] | None = None) -> int:
     if len(argv) != 2:
         print("usage: python3 check_route_allowlist.py <portal-values.env>", file=sys.stderr)
         return 2
+    version = version or tuple(sys.version_info[:3])
+    if lenient_ipaddress(version):
+        running = ".".join(str(part) for part in version[:3])
+        print(
+            f"STOP: Python {running} accepts addresses the router refuses; run this check with "
+            "Python 3.8.12 or later (3.9.5 or later on 3.9)"
+        )
+        return 1
     # Bytes as oc reads them: no newline translation.
     found = file_problems(Path(argv[1]).read_bytes().decode("utf-8"))
     for problem in found:
