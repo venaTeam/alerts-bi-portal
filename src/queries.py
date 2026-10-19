@@ -465,7 +465,7 @@ class Decision:
     state: str
     note: str
     decided_at: datetime
-    decided_by: str
+    # Who decided is not recorded or shown (design "Admin console without login", 2026-10-19).
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +481,7 @@ def decisions_for(
     """Every decision on this exact identity, from any published week, oldest first."""
     rows = db.query(
         """
-        SELECT finding_id, state, note, decided_at, decided_by
+        SELECT finding_id, state, note, decided_at
         FROM portal_decisions
         WHERE alert_schema = :alert_schema AND application = :application
           AND key_field = :key_field
@@ -497,7 +497,6 @@ def decisions_for(
                 state=str(row["state"]),
                 note=str(row["note"]),
                 decided_at=row["decided_at"],
-                decided_by=str(row["decided_by"]),
             )
         )
     return history
@@ -513,7 +512,7 @@ def latest_decisions(
         """
         WITH ranked AS (
         SELECT d.alert_schema, d.application, d.key_field, d.finding_id, d.state, d.note,
-               d.decided_at, d.decided_by,
+               d.decided_at,
                ROW_NUMBER() OVER(PARTITION BY d.alert_schema,d.application,d.key_field,d.finding_id
                  ORDER BY d.decided_at DESC,d.decision_id DESC) AS recency
         FROM portal_decisions AS d
@@ -523,7 +522,7 @@ def latest_decisions(
         WHERE EXISTS (SELECT 1 FROM OPENJSON(:identities)
           WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(512) '$[2]') i
           WHERE i.s=d.alert_schema AND i.a=d.application AND i.k=d.key_field)
-        ) SELECT alert_schema,application,key_field,finding_id,state,note,decided_at,decided_by
+        ) SELECT alert_schema,application,key_field,finding_id,state,note,decided_at
         FROM ranked WHERE recency=1
         """,
         {
@@ -544,7 +543,6 @@ def latest_decisions(
             state=str(row["state"]),
             note=str(row["note"]),
             decided_at=row["decided_at"],
-            decided_by=str(row["decided_by"]),
         )
     return latest
 
