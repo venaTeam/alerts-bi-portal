@@ -144,9 +144,21 @@ oc get deployment,service,route -n "$NS" -o custom-columns='KIND:.kind,NAME:.met
   ```
 
 - A portal runs under another name: record its objects the same way (by name instead of `-l`),
-  and leave `PORTAL_ROUTE_HOST` empty for the first deploy, because its Route still holds the
-  host. After section 7 passes, and with the service owner's authorization, delete the old
-  Deployment, Service and Route, set `PORTAL_ROUTE_HOST` to the old host and repeat section 5.
+  including the old Route's host (`oc get route <old-route> -n "$NS" -o jsonpath='{.spec.host}'`).
+  Leave `PORTAL_ROUTE_HOST` empty for the first deploy, because the old Route still holds that
+  host, and run sections 5 and 7 against the generated host. Then move the host over, with the
+  service owner's authorization. Changing an existing Route's host needs `update` on
+  `routes/custom-host`, which the `edit` and `admin` roles lack, so the temporary Route is
+  recreated rather than edited:
+
+  ```bash
+  oc delete route/<old-route> route/alerts-bi-portal -n "$NS"
+  ```
+
+  Set `PORTAL_ROUTE_HOST` to the old host and repeat section 5 (it creates the Route with that
+  host, which the default rights allow) and section 7. Readers see no portal between the delete
+  and the apply. Only after section 7 passes on the old host, delete the old Deployment and
+  Service.
 
 ## 5. Deploy
 
@@ -248,6 +260,7 @@ older than shared 0.1.8 while encoded team links (`/teams/~...`) are in use.
 | Connection refused or reset from a reader's machine | The reader's network is outside `PORTAL_ROUTE_ALLOWLIST` |
 | Browser: `Application is not available` | No ready pod: `oc get pods -n "$NS" -l app=alerts-bi-portal` and the rows above |
 | Route shows `HostAlreadyClaimed` | Another Route holds `PORTAL_ROUTE_HOST`; see section 4 |
+| Apply or dry run fails on the Route's `spec.host` (immutable, or `routes/custom-host` forbidden) | `PORTAL_ROUTE_HOST` differs from the live Route's host; an existing Route's host cannot be changed with the `edit`/`admin` roles. Delete `route/alerts-bi-portal` and repeat section 5, as in section 4 |
 | Apply fails: `spec.selector: ... field is immutable` | The existing `alerts-bi-portal` Deployment uses other labels. With the service owner's authorization, `oc delete deployment alerts-bi-portal -n "$NS"` (readers see a short outage) and repeat section 5 |
 | Pods rejected: `must specify limits.cpu` | The project's quota needs CPU limits. Stop and ask the project owner for a LimitRange with default CPU limits |
 
