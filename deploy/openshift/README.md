@@ -16,7 +16,7 @@ these files do not grant it.
 |---|---|
 | `portal.yaml` | Template: ServiceAccount, Deployment, Service and Route |
 | `values.env.example` | Template values: image, route, allowlists, SQL Secret, sizing |
-| `check_route_allowlist.py` | Checks `PORTAL_ROUTE_ALLOWLIST` before applying (section 3) |
+| `check_route_allowlist.py` | Checks `PORTAL_ROUTE_ALLOWLIST`, as `oc` reads it, before applying (sections 3 and 5) |
 
 ## 1. What gets deployed
 
@@ -132,7 +132,9 @@ message for `PORTAL_ROUTE_ALLOWLIST` means the allowlist line is empty.
 
 The portal has no login, and the router then admits every client: it sets no client ACL when
 the Route's allowlist is empty, has leading or trailing spaces, or has any entry it cannot
-parse as an IPv4 or IPv6 address or CIDR. So check every entry before applying:
+parse as an IPv4 or IPv6 address or CIDR. So check every entry before applying. The check reads
+the file the way `oc process` does, where the last assignment of a key wins, and accepts only
+one plain `PORTAL_ROUTE_ALLOWLIST=<list>` line:
 
 ```bash
 python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"
@@ -141,7 +143,8 @@ python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"
 Expect `allowlist ok`. Each `STOP:` line names one problem, for example `'10.0.0.0/33' is not
 a valid IPv4 or IPv6 address or CIDR`. Fix each one in `portal-values.env`: one to 61 IPv4 or
 IPv6 addresses or CIDRs, separated by single spaces with none before or after, and none with a
-`/0` prefix. Then repeat this section.
+`/0` prefix, on exactly one `PORTAL_ROUTE_ALLOWLIST=` line with no leading spaces, `export`,
+quotes or comment. Then repeat this section.
 
 ## 4. Fresh install or upgrade?
 
@@ -178,7 +181,10 @@ oc get deployment,service,route -n "$NS" -o custom-columns='KIND:.kind,NAME:.met
 
 ## 5. Deploy
 
+Run the allowlist check of section 3 again first, and continue only on `allowlist ok`:
+
 ```bash
+python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"
 oc process --local -f portal.yaml --param-file "$VALUES_DIR/portal-values.env" -o yaml > "$VALUES_DIR/portal.rendered.yaml"
 oc apply -n "$NS" --dry-run=server -f "$VALUES_DIR/portal.rendered.yaml"
 oc apply -n "$NS" -f "$VALUES_DIR/portal.rendered.yaml"
