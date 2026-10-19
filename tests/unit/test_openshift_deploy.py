@@ -7,8 +7,10 @@ must be there with the template's default, and the template must set every PORTA
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 import re
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from src.config import DEFAULT_ALLOWED_NETWORKS, DEFAULT_PORTAL_PORT, PortalSettings
@@ -71,41 +73,112 @@ def test_the_route_allowlist_is_required_and_defaults_to_the_private_ranges() ->
     assert _default(allowlist) == "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
 
-def _allowlist_check() -> re.Pattern[str]:
-    """The runbook's pre-apply allowlist check, as the `grep -Eqx` pattern it runs."""
+def _allowlist_checker() -> ModuleType:
+    """deploy/openshift/check_route_allowlist.py, the runbook's pre-apply check."""
+    path = DEPLOY / "check_route_allowlist.py"
+    spec = importlib.util.spec_from_file_location("check_route_allowlist", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_runbook_runs_the_allowlist_check_before_applying() -> None:
     runbook = (DEPLOY / "README.md").read_text("utf-8")
-    entry = re.search(r"^entry='(.+)'$", runbook, flags=re.MULTILINE)
-    assert entry is not None, "the allowlist check"
-    assert 'grep -Eqx "$entry( $entry){0,60}"' in runbook
-    return re.compile(f"{entry.group(1)}( {entry.group(1)}){{0,60}}")
+    check = runbook.index('python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"')
+    assert check < runbook.index("oc apply")
 
 
 @pytest.mark.parametrize(
     "value",
     [
+        # Empty, blank or padded: the router sets no client ACL.
         "",
         " ",
         "   ",
         "10.0.0.0/8 ",
         " 10.0.0.0/8",
         "10.0.0.0/8  172.16.0.0/12",
+        # Not addresses at all.
         "10.0.0.0/8,172.16.0.0/12",
         "company network",
         "10.0.0.0/8 everyone",
+        # Invalid IPv4 octets.
+        "999.0.0.1",
+        "10.0.0.256",
+        "256.1.1.1/8",
+        "010.0.0.1",
+        "10.0.0",
+        "10.0.0.0.1",
+        # Invalid prefix lengths.
+        "10.0.0.0/33",
+        "10.0.0.0/",
+        "10.0.0.0/08",
+        "10.0.0.0/-1",
+        "10.0.0.0/8/8",
+        "fd00::/129",
+        # Malformed IPv6.
+        ":",
+        ":::",
+        "fd00::g",
+        "1:2:3:4:5:6:7:8:9",
+        "fd00:::1",
+        "fe80::1%eth0",
+        # Admits every address.
+        "0.0.0.0/0",
+        "::/0",
+        "10.0.0.0/8 0.0.0.0/0",
+        # More entries than the router takes.
         " ".join(["10.0.0.1"] * 62),
     ],
 )
-def test_the_runbook_refuses_an_empty_or_invalid_route_allowlist(value: str) -> None:
-    assert _allowlist_check().fullmatch(value) is None
+def test_the_allowlist_check_refuses_an_empty_or_invalid_allowlist(value: str) -> None:
+    assert _allowlist_checker().problems(value)
 
 
 @pytest.mark.parametrize(
     "value",
-    ["203.0.113.7", "fd00::/8 10.1.2.0/24", " ".join(["10.0.0.1"] * 61)],
+    [
+        "203.0.113.7",
+        "10.0.0.1/8",
+        "fd00::/8 10.1.2.0/24",
+        "::ffff:10.0.0.1",
+        "2001:db8::1/128",
+        " ".join(["10.0.0.1"] * 61),
+    ],
 )
-def test_the_runbook_accepts_a_valid_route_allowlist(value: str) -> None:
-    assert _allowlist_check().fullmatch(value) is not None
-    assert _allowlist_check().fullmatch(_values_example()["PORTAL_ROUTE_ALLOWLIST"]) is not None
+def test_the_allowlist_check_accepts_a_valid_allowlist(value: str) -> None:
+    assert _allowlist_checker().problems(value) == []
+
+
+def test_the_allowlist_check_reads_the_value_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checker = _allowlist_checker()
+    values = tmp_path / "portal-values.env"
+    example = (DEPLOY / "values.env.example").read_text("utf-8")
+    values.write_text(example, "utf-8")
+    assert checker.main(["check", str(values)]) == 0
+    assert capsys.readouterr().out == "allowlist ok\n"
+    bad = example.replace(
+        "PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16",
+        "PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8 999.0.0.1 10.0.0.0/33",
+    )
+    values.write_text(bad, "utf-8")
+    assert checker.main(["check", str(values)]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        "STOP: '999.0.0.1' is not a valid IPv4 or IPv6 address or CIDR",
+        "STOP: '10.0.0.0/33' is not a valid IPv4 or IPv6 address or CIDR",
+    ]
+    for text, problem in [
+        ("PORTAL_IMAGE=x\n", "is missing"),
+        ("PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8\nPORTAL_ROUTE_ALLOWLIST=\n", "is set 2 times"),
+        ("PORTAL_ROUTE_ALLOWLIST=\n", "is empty"),
+    ]:
+        values.write_text(text, "utf-8")
+        assert checker.main(["check", str(values)]) == 1
+        assert problem in capsys.readouterr().out
 
 
 def test_template_sets_every_portal_setting_the_code_reads() -> None:
