@@ -9,6 +9,7 @@ Read-only published weekly reviews through the portal_* SQL views; consumes shar
 - design: `docs/upstream/alerts_bi_flow.md` — Approved runtime flow.
 - design: `docs/upstream/alerts_bi_implementation_plan.md` — Implementation blueprint.
 - design: `docs/upstream/outputs.md` — Output and API meanings.
+- deployment: `deploy/openshift/README.md` — The OpenShift procedure, Template and value file; runs after the alerts-bi-admin deployment and implements `docs/upstream/openshift-deployment.md`. Keep them in step (tests/unit/test_openshift_deploy.py).
 
 ### Verification
 

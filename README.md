@@ -48,6 +48,14 @@ The default container listener remains loopback. A deployment may explicitly set
 `PORTAL_HOST=0.0.0.0` when it provides the intended network boundary and allowlist.
 Images contain no credentials or database migrations.
 
+## Deploying on OpenShift
+
+Follow [`deploy/openshift/README.md`](deploy/openshift/README.md). It deploys the portal with
+the `portal.yaml` Template after `alerts-bi-admin` (whose own `deploy/openshift/README.md`
+creates the shared SQL configuration and applies the migrations); you supply only the values in
+`deploy/openshift/values.env.example`. The Template sets `PORTAL_HOST=0.0.0.0` behind both the
+Route's client allowlist and `PORTAL_ALLOWED_NETWORKS`.
+
 Canonical product decisions and coordinated SQL integration/acceptance tests live in
 `venaTeam/alerts-bi-design`. The pinned snapshot in `docs/upstream/` allows agents to work
 from this clone alone. Update the shared wheel with its source release and contract pin;

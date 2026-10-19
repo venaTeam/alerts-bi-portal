@@ -1,0 +1,141 @@
+# OpenShift Template for the read-only alerts-bi-portal.
+#
+# Do not edit values here. Fill a copy of values.env.example and render with:
+#   oc process --local -f portal.yaml --param-file <portal-values.env> -o yaml | oc apply -n <NAMESPACE> -f -
+# The complete procedure is in README.md next to this file. The portal needs the ConfigMap
+# alerts-bi-config and the Secret alerts-bi-secrets that the alerts-bi-admin deployment creates,
+# and a database already migrated by alerts-bi-admin.
+#
+# The portal has no login. Two allowlists keep it on the company network:
+#   the Route's ip_allowlist (PORTAL_ROUTE_ALLOWLIST) filters real client addresses at the router;
+#   the application's PORTAL_ALLOWED_NETWORKS sees the router's and in-cluster addresses.
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: alerts-bi-portal
+  annotations:
+    description: Alerts BI read-only review portal over the published portal_* SQL views.
+objects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: alerts-bi-portal
+      labels: {app: alerts-bi-portal, app.kubernetes.io/part-of: alerts-bi}
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: alerts-bi-portal
+      labels: {app: alerts-bi-portal, app.kubernetes.io/part-of: alerts-bi}
+    spec:
+      replicas: "${{PORTAL_REPLICAS}}"
+      selector: {matchLabels: {app: alerts-bi-portal}}
+      template:
+        metadata:
+          labels: {app: alerts-bi-portal, app.kubernetes.io/part-of: alerts-bi}
+        spec:
+          serviceAccountName: alerts-bi-portal
+          automountServiceAccountToken: false
+          imagePullSecrets: [{name: "${IMAGE_PULL_SECRET}"}]
+          securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+          containers:
+            - name: portal
+              image: "${PORTAL_IMAGE}"
+              command: ["alerts-bi-portal"]
+              env:
+                # The Service and router reach the pod address; the allowlist below admits them.
+                - {name: PORTAL_HOST, value: "0.0.0.0"}
+                - {name: PORTAL_PORT, value: "8100"}
+                - {name: PORTAL_ALLOWED_NETWORKS, value: "${PORTAL_ALLOWED_NETWORKS}"}
+                - {name: PORTAL_PAGE_SIZE, value: "${PORTAL_PAGE_SIZE}"}
+                # Only the SQL login, never the Elasticsearch or model credentials.
+                - name: SQL_USER
+                  valueFrom: {secretKeyRef: {name: "${PORTAL_SQL_SECRET}", key: SQL_USER}}
+                - name: SQL_PASSWORD
+                  valueFrom: {secretKeyRef: {name: "${PORTAL_SQL_SECRET}", key: SQL_PASSWORD}}
+              # SQL_HOST, SQL_PORT, SQL_DATABASE, SQL_ENCRYPT, SQL_TRUST_SERVER_CERTIFICATE,
+              # SQL_REQUEST_TIMEOUT_MS and LOG_LEVEL; the portal ignores the other keys.
+              envFrom:
+                - configMapRef: {name: alerts-bi-config}
+              ports: [{containerPort: 8100, name: http}]
+              # TCP probes: they need no SQL and are not subject to the client allowlist.
+              # README.md checks /healthz, which also verifies every portal view.
+              readinessProbe:
+                tcpSocket: {port: 8100}
+                initialDelaySeconds: 5
+                periodSeconds: 10
+              livenessProbe:
+                tcpSocket: {port: 8100}
+                initialDelaySeconds: 30
+                periodSeconds: 20
+              resources:
+                requests: {cpu: "${PORTAL_CPU_REQUEST}", memory: "${PORTAL_MEMORY_REQUEST}"}
+                limits: {memory: "${PORTAL_MEMORY_LIMIT}"}
+              volumeMounts:
+                - {name: ca-bundle, mountPath: /etc/alerts-bi-ca, readOnly: true}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+          volumes:
+            # The same optional CA bundle as admin, so a shared SSL_CERT_FILE setting resolves here too.
+            - {name: ca-bundle, configMap: {name: alerts-bi-ca-bundle, optional: true}}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: alerts-bi-portal
+      labels: {app: alerts-bi-portal, app.kubernetes.io/part-of: alerts-bi}
+    spec:
+      selector: {app: alerts-bi-portal}
+      ports: [{name: http, port: 8100, targetPort: 8100}]
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: alerts-bi-portal
+      labels: {app: alerts-bi-portal, app.kubernetes.io/part-of: alerts-bi}
+      annotations:
+        # Both keys: newer routers read ip_allowlist, older ones only ip_whitelist.
+        haproxy.router.openshift.io/ip_allowlist: "${PORTAL_ROUTE_ALLOWLIST}"
+        haproxy.router.openshift.io/ip_whitelist: "${PORTAL_ROUTE_ALLOWLIST}"
+    spec:
+      # Empty PORTAL_ROUTE_HOST lets OpenShift generate the host name.
+      host: "${PORTAL_ROUTE_HOST}"
+      to: {kind: Service, name: alerts-bi-portal}
+      port: {targetPort: http}
+      tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+
+parameters:
+  - name: PORTAL_IMAGE
+    description: alerts-bi-portal image by digest, <registry>/<repository>@sha256:<64 hex>.
+    required: true
+  - name: PORTAL_ROUTE_HOST
+    description: Portal host name. Empty lets OpenShift generate one; keep the existing host when upgrading.
+    value: ""
+  - name: PORTAL_ROUTE_ALLOWLIST
+    description: Space-separated client CIDRs the router admits to the portal (the company network); at most 61 entries.
+    value: 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+  - name: PORTAL_ALLOWED_NETWORKS
+    description: Comma-separated networks the application admits. They must include 127.0.0.0/8 and the cluster's pod and node networks, which the router and README.md checks connect from.
+    value: 127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7
+  - name: PORTAL_SQL_SECRET
+    description: Secret holding the portal's SQL_USER and SQL_PASSWORD. alerts-bi-secrets shares the admin login; alerts-bi-portal-sql holds a reader-only login.
+    value: alerts-bi-secrets
+  - name: PORTAL_PAGE_SIZE
+    description: Fix list rows per page, 1 to 200.
+    value: "25"
+  - name: PORTAL_REPLICAS
+    description: Portal pods. The portal only reads; each pod keeps its own small SQL connection pool.
+    value: "1"
+  - name: IMAGE_PULL_SECRET
+    description: Pull secret for PORTAL_IMAGE. If no such Secret exists, pods pull without credentials.
+    value: alerts-bi-pull
+  - name: PORTAL_CPU_REQUEST
+    description: CPU request of the portal container.
+    value: 100m
+  - name: PORTAL_MEMORY_REQUEST
+    description: Memory request of the portal container.
+    value: 128Mi
+  - name: PORTAL_MEMORY_LIMIT
+    description: Memory limit of the portal container.
+    value: 512Mi
