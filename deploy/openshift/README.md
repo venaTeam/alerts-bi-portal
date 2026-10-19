@@ -181,18 +181,26 @@ oc get deployment,service,route -n "$NS" -o custom-columns='KIND:.kind,NAME:.met
 
 ## 5. Deploy
 
-Run the allowlist check of section 3 again first, and continue only on `allowlist ok`:
+Run this block as one unit. It checks the allowlist again (section 3), renders, dry-runs, applies
+and waits, and the first step that fails stops it: nothing after that step runs, so a refused
+allowlist is never rendered or applied. The parentheses keep `set -e` out of your own shell.
 
 ```bash
-python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"
-oc process --local -f portal.yaml --param-file "$VALUES_DIR/portal-values.env" -o yaml > "$VALUES_DIR/portal.rendered.yaml"
-oc apply -n "$NS" --dry-run=server -f "$VALUES_DIR/portal.rendered.yaml"
-oc apply -n "$NS" -f "$VALUES_DIR/portal.rendered.yaml"
-oc rollout status deployment/alerts-bi-portal -n "$NS" --timeout=10m
+(
+  set -e
+  python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"
+  oc process --local -f portal.yaml --param-file "$VALUES_DIR/portal-values.env" -o yaml > "$VALUES_DIR/portal.rendered.yaml"
+  oc apply -n "$NS" --dry-run=server -f "$VALUES_DIR/portal.rendered.yaml"
+  oc apply -n "$NS" -f "$VALUES_DIR/portal.rendered.yaml"
+  oc rollout status deployment/alerts-bi-portal -n "$NS" --timeout=10m
+)
 ```
 
-Expect the dry run to list four objects ending in `(server dry run)`, the apply to list them as
-`created`, `configured` or `unchanged`, and `deployment "alerts-bi-portal" successfully rolled out`.
+Expect `allowlist ok`, the dry run to list four objects ending in `(server dry run)`, the apply
+to list them as `created`, `configured` or `unchanged`, and
+`deployment "alerts-bi-portal" successfully rolled out`. Any `STOP:` line or error means the
+block stopped there: fix the cause and run the whole block again. Do not run its lines one by
+one, and do not add `||` or `&&` after the closing parenthesis, which would switch `set -e` off.
 
 ## 6. Reader-only SQL login
 

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import dataclasses
 import importlib.util
+import ipaddress
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -83,10 +88,93 @@ def _allowlist_checker() -> ModuleType:
     return module
 
 
-def test_the_runbook_runs_the_allowlist_check_before_applying() -> None:
+def _deploy_block() -> str:
+    """The bash block of README.md section 5, the only one that applies objects."""
     runbook = (DEPLOY / "README.md").read_text("utf-8")
-    check = runbook.index('python3 check_route_allowlist.py "$VALUES_DIR/portal-values.env"')
-    assert check < runbook.index("oc apply")
+    section = runbook.split("\n## 5. Deploy\n", 1)[1].split("\n## ", 1)[0]
+    blocks = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)
+    assert len(blocks) == 1
+    assert runbook.count("oc apply") == section.count("oc apply") == 2
+    return str(blocks[0])
+
+
+def _bash() -> str:
+    bash = shutil.which("bash")
+    # On Windows, System32's bash.exe starts WSL rather than a shell for this checkout.
+    if bash is None or "system32" in bash.lower() or "windowsapps" in bash.lower():
+        pytest.skip("no POSIX bash to run the runbook block")
+    return bash
+
+
+def _run_deploy(tmp_path: Path, values: str, fail_on: str = "") -> tuple[int, list[str]]:
+    """Run the section 5 block with stub `oc` and `python3`; the exit status and oc calls."""
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    oc = stubs / "oc"
+    oc.write_bytes(
+        b'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$OC_LOG"\n'
+        b'case "$*" in *"$OC_FAIL"*) [ -n "$OC_FAIL" ] && exit 1 ;; esac\n'
+        b'[ "$1" = process ] && echo "kind: List"\nexit 0\n'
+    )
+    python3 = stubs / "python3"
+    python3.write_bytes(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n'.encode())
+    for stub in (oc, python3):
+        stub.chmod(0o755)
+    (tmp_path / "portal-values.env").write_bytes(values.encode("utf-8"))
+    log = tmp_path / "oc.log"
+    env = {
+        **os.environ,
+        "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
+        "VALUES_DIR": tmp_path.as_posix(),
+        "NS": "alerts-bi",
+        "OC_LOG": log.as_posix(),
+        "OC_FAIL": fail_on,
+    }
+    result = subprocess.run(
+        [_bash(), "-c", _deploy_block()], cwd=DEPLOY, env=env, capture_output=True, check=False
+    )
+    calls = log.read_text("utf-8").splitlines() if log.exists() else []
+    return result.returncode, calls
+
+
+EXAMPLE_ALLOWLIST = "PORTAL_ROUTE_ALLOWLIST=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+
+def test_the_deploy_block_renders_dry_runs_applies_and_waits_in_order(tmp_path: Path) -> None:
+    status, calls = _run_deploy(tmp_path, f"PORTAL_IMAGE=x\n{EXAMPLE_ALLOWLIST}\n")
+    assert status == 0
+    assert [call.split()[0] for call in calls] == ["process", "apply", "apply", "rollout"]
+    assert "--dry-run=server" in calls[1] and "--dry-run" not in calls[2]
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        "PORTAL_ROUTE_ALLOWLIST=999.0.0.1",
+        "PORTAL_ROUTE_ALLOWLIST=",
+        "PORTAL_ROUTE_ALLOWLIST=   ",
+        "PORTAL_ROUTE_ALLOWLIST=::ffff:010.0.0.1",
+        f"{EXAMPLE_ALLOWLIST}\n PORTAL_ROUTE_ALLOWLIST=999.0.0.1",
+    ],
+)
+def test_a_refused_allowlist_stops_the_deploy_block_before_oc_runs(
+    tmp_path: Path, allowlist: str
+) -> None:
+    status, calls = _run_deploy(tmp_path, f"PORTAL_IMAGE=x\n{allowlist}\n")
+    assert status != 0
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("fail_on", "steps"),
+    [("process", ["process"]), ("--dry-run=server", ["process", "apply"])],
+)
+def test_a_failing_step_stops_the_deploy_block_before_the_apply(
+    tmp_path: Path, fail_on: str, steps: list[str]
+) -> None:
+    status, calls = _run_deploy(tmp_path, f"PORTAL_IMAGE=x\n{EXAMPLE_ALLOWLIST}\n", fail_on)
+    assert status != 0
+    assert [call.split()[0] for call in calls] == steps
 
 
 @pytest.mark.parametrize(
@@ -124,6 +212,12 @@ def test_the_runbook_runs_the_allowlist_check_before_applying() -> None:
         "1:2:3:4:5:6:7:8:9",
         "fd00:::1",
         "fe80::1%eth0",
+        # IPv4 tails of IPv6 literals get the strict IPv4 rule: Python 3.8.0-3.8.11 accepts
+        # leading zeros there, the router does not.
+        "::ffff:010.0.0.1",
+        "::ffff:10.0.0.256",
+        "64:ff9b::010.0.0.1/120",
+        "::ffff:10.0.0",
         # Admits every address.
         "0.0.0.0/0",
         "::/0",
@@ -134,6 +228,26 @@ def test_the_runbook_runs_the_allowlist_check_before_applying() -> None:
 )
 def test_the_allowlist_check_refuses_an_empty_or_invalid_allowlist(value: str) -> None:
     assert _allowlist_checker().problems(value)
+
+
+def test_ipv4_tails_are_refused_where_ipaddress_accepts_leading_zeros(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Python 3.8.0-3.8.11 read "010" in a dotted tail as 10; emulate that ipaddress so the
+    # check's own strict rule, not this interpreter's ipaddress, has to refuse the literal.
+    checker = _allowlist_checker()
+    real = ipaddress.ip_network
+
+    def lenient(value: str, strict: bool = True) -> object:
+        head, separator, tail = value.rpartition(":")
+        address, slash, prefix = tail.partition("/")
+        octets = [str(int(part)) if part.isdigit() else part for part in address.split(".")]
+        return real(head + separator + ".".join(octets) + slash + prefix, strict=strict)
+
+    monkeypatch.setattr(checker.ipaddress, "ip_network", lenient)
+    assert lenient("::ffff:010.0.0.1") is not None
+    assert checker.problems("::ffff:010.0.0.1")
+    assert checker.problems("::ffff:10.0.0.1") == []
 
 
 @pytest.mark.parametrize(

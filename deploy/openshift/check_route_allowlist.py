@@ -5,6 +5,8 @@ ACL: for an empty allowlist, and on 4.14 also for a list with leading or trailin
 with any entry that is not an IPv4/IPv6 address or CIDR (router parseIPList). This check
 refuses all of them, plus two stricter cases: entries must be separated by single spaces, and
 no entry may admit every address (a /0 prefix). It also keeps the 61-entry limit of README.md.
+Dotted IPv4, alone or at the end of an IPv6 literal, is checked by its own strict rule rather
+than by `ipaddress`, whose leading-zero handling changed in Python 3.8.12 and 3.9.5.
 
 The value checked is the one `oc process --param-file` uses. oc 4.14 reads the file with its
 own copy of godotenv (pkg/helpers/newapp/app/env.go): it trims keys, accepts `export KEY=`,
@@ -42,6 +44,10 @@ def entry_problem(entry: str) -> str | None:
         return "has an invalid prefix length"
     if ":" not in address and not _IPV4.fullmatch(address):
         return "is not an IPv4 address or CIDR"
+    # An IPv6 literal may end in dotted IPv4 (::ffff:10.0.0.1). Python 3.8.0-3.8.11 accepts
+    # leading zeros there; the router refuses them, so the tail gets the same strict rule.
+    if ":" in address and "." in address and not _IPV4.fullmatch(address.rsplit(":", 1)[1]):
+        return "ends in an IPv4 part that is not a plain dotted address"
     if "%" in address:
         return "has an IPv6 zone, which the router does not accept"
     try:
