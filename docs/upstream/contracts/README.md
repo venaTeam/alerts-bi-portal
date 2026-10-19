@@ -59,3 +59,15 @@ without modifying 001–015. It stores every `key_field` column with binary coll
 refreshes portal_alerts, portal_alert_list and portal_decisions. View columns and types in
 sql-views.json, CSV outputs, console routes and shared/operations interfaces are unchanged.
 Comparisons on `key_field` through the views are now exact.
+
+The 2026-10-19 fixed-width identity key amendment appends migration 018_alert_identity_hash
+without modifying 001–017. It adds a persisted computed `identity_hash` to `alert_findings` and
+`llm_verdicts` and keys both tables by it, so every identity that fits its columns can be
+stored. Identity comparison is unchanged. No view references the new column: view columns and
+types in sql-views.json, CSV outputs, console routes and shared/operations interfaces are
+unchanged.
+
+The 2026-10-19 no-login amendment appends migration 019_erase_operator_names without modifying
+001–018. It blanks every stored operator name (the scheduler's `weekly-schedule` marker stays)
+and keeps submission keys that several people had used apart as `#<row id>`. No column, view,
+type or CSV output changes.
