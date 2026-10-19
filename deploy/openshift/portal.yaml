@@ -113,7 +113,8 @@ parameters:
     description: Portal host name. Empty lets OpenShift generate one; keep the existing host when upgrading.
     value: ""
   - name: PORTAL_ROUTE_ALLOWLIST
-    description: Space-separated client CIDRs the router admits to the portal (the company network); at most 61 entries.
+    description: Space-separated client CIDRs the router admits to the portal (the company network); at most 61 entries. Never empty - an empty list makes the router admit every client.
+    required: true
     value: 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
   - name: PORTAL_ALLOWED_NETWORKS
     description: Comma-separated networks the application admits. They must include 127.0.0.0/8 and the cluster's pod and node networks, which the router and README.md checks connect from.
