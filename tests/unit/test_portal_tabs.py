@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import pytest
 from alerts_bi_shared.catalogs import R6_FLAP_CYCLES, R6_STUCK_OPEN
 from alerts_bi_shared.insights import TeamSummary
+from alerts_bi_shared.ui.explain import format_instant
 from src import tabs
 from src.queries import (
     AlertDetail,
@@ -130,7 +131,7 @@ RULE_ALERT = work_alert(
     row_count=120,
     attention_rank=0,
 )
-DECISION = Decision("P2", "pending", f"asked {HOSTILE}", END, f"op {HOSTILE}")
+DECISION = Decision("P2", "pending", f"asked {HOSTILE}", END)
 
 
 def fix(**filters: str) -> str:
@@ -374,3 +375,11 @@ def test_the_alert_page_shows_the_decision_to_make_and_marks_it_advisory() -> No
     assert "Get v2 ready" in page and "Critical, no runbook" in page
     assert "starts without one" in page, "a decision never carries to an enriched key"
     assert "not a usable http(s) link" in page
+
+
+def test_the_decision_history_names_nobody() -> None:
+    # Design "Admin console without login", 2026-10-19: who decided is not shown.
+    page = PAGES["alert-review"]()
+    history = page[page.index('<div class="history">') :]
+    assert "asked &lt;script&gt;" in history
+    assert f'<span class="when">{format_instant(END)}</span>' in history

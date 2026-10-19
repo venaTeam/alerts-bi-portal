@@ -1037,7 +1037,7 @@ def _history(decisions: Sequence[Decision], schema: str) -> str:
         "<li>"
         f'<span class="chip human {h(d.state)}">{h(d.state.capitalize())}</span>'
         f'<span class="text">{h(d.note)}</span>'
-        f'<span class="when">{h(format_instant(d.decided_at))} · {h(d.decided_by)}</span>'
+        f'<span class="when">{h(format_instant(d.decided_at))}</span>'
         "</li>"
         for d in decisions
     )
