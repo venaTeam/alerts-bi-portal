@@ -10,6 +10,7 @@ import dataclasses
 import re
 from pathlib import Path
 
+import pytest
 from src.config import DEFAULT_ALLOWED_NETWORKS, DEFAULT_PORTAL_PORT, PortalSettings
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,8 +59,53 @@ def test_values_example_holds_every_parameter_with_the_template_default() -> Non
     values = _values_example()
     assert set(values) == set(parameters)
     for key, fields in parameters.items():
-        expected = "" if fields.get("required") == "true" else _default(fields)
-        assert values[key] == expected, key
+        assert values[key] == _default(fields), key
+
+
+def test_the_route_allowlist_is_required_and_defaults_to_the_private_ranges() -> None:
+    # The portal has no login and the router admits every client when the Route's allowlist is
+    # empty, so `oc process` must refuse an empty override while the example keeps the default.
+    _, parameters = _template()
+    allowlist = parameters["PORTAL_ROUTE_ALLOWLIST"]
+    assert allowlist.get("required") == "true"
+    assert _default(allowlist) == "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+
+def _allowlist_check() -> re.Pattern[str]:
+    """The runbook's pre-apply allowlist check, as the `grep -Eqx` pattern it runs."""
+    runbook = (DEPLOY / "README.md").read_text("utf-8")
+    entry = re.search(r"^entry='(.+)'$", runbook, flags=re.MULTILINE)
+    assert entry is not None, "the allowlist check"
+    assert 'grep -Eqx "$entry( $entry){0,60}"' in runbook
+    return re.compile(f"{entry.group(1)}( {entry.group(1)}){{0,60}}")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        " ",
+        "   ",
+        "10.0.0.0/8 ",
+        " 10.0.0.0/8",
+        "10.0.0.0/8  172.16.0.0/12",
+        "10.0.0.0/8,172.16.0.0/12",
+        "company network",
+        "10.0.0.0/8 everyone",
+        " ".join(["10.0.0.1"] * 62),
+    ],
+)
+def test_the_runbook_refuses_an_empty_or_invalid_route_allowlist(value: str) -> None:
+    assert _allowlist_check().fullmatch(value) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["203.0.113.7", "fd00::/8 10.1.2.0/24", " ".join(["10.0.0.1"] * 61)],
+)
+def test_the_runbook_accepts_a_valid_route_allowlist(value: str) -> None:
+    assert _allowlist_check().fullmatch(value) is not None
+    assert _allowlist_check().fullmatch(_values_example()["PORTAL_ROUTE_ALLOWLIST"]) is not None
 
 
 def test_template_sets_every_portal_setting_the_code_reads() -> None:

@@ -71,7 +71,7 @@ Expect both objects listed and `successfully rolled out`. Otherwise deploy admin
 |---|---|---|
 | `PORTAL_IMAGE` | yes | Digest of the CI image for the release commit; see [Image reference](#image-reference) |
 | `PORTAL_ROUTE_HOST` | no | Empty generates a host. Upgrade: the host of the existing portal Route |
-| `PORTAL_ROUTE_ALLOWLIST` | no | The networks readers browse from, at most 61 entries. Upgrade: the existing Route's `haproxy.router.openshift.io/ip_allowlist` (or `ip_whitelist`) annotation |
+| `PORTAL_ROUTE_ALLOWLIST` | yes, never empty (the example holds the private ranges) | The networks readers browse from, separated by single spaces, at most 61 entries. Upgrade: the existing Route's `haproxy.router.openshift.io/ip_allowlist` (or `ip_whitelist`) annotation |
 | `PORTAL_ALLOWED_NETWORKS` | no | Keep the default unless the cluster networks are outside it; see below. Upgrade: the running value (the `PORTAL_ALLOWED_NETWORKS` line of `oc set env deployment/<portal> -n "$NS" --list`), plus `127.0.0.0/8` if it is missing |
 | `PORTAL_SQL_SECRET` | no | `alerts-bi-secrets` until a reader-only login exists ([section 6](#6-reader-only-sql-login)). Upgrade: if the running portal reads `SQL_USER` from another Secret (`oc get deployment <portal> -n "$NS" -o yaml`), copy that Secret's two keys into `alerts-bi-portal-sql` (section 6) and use that name |
 | `PORTAL_PAGE_SIZE` | no | Upgrade: the running value, if set |
@@ -125,7 +125,19 @@ grep 'image:' "$VALUES_DIR/portal.rendered.yaml"
 ```
 
 Expect no error from `oc process` and one `image:` line containing `@sha256:`.
-`parameter PORTAL_IMAGE is required and must be specified` means that line is empty.
+`parameter PORTAL_IMAGE is required and must be specified` means that line is empty; the same
+message for `PORTAL_ROUTE_ALLOWLIST` means the allowlist line is empty.
+
+The router admits every client when the Route's allowlist is empty, and the portal has no
+login, so check the allowlist itself before applying:
+
+```bash
+entry='(([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*(/[0-9]{1,3})?)'
+sed -n 's/^PORTAL_ROUTE_ALLOWLIST=//p' "$VALUES_DIR/portal-values.env" | grep -Eqx "$entry( $entry){0,60}" && echo 'allowlist ok' || echo 'STOP: PORTAL_ROUTE_ALLOWLIST is empty or invalid'
+```
+
+Expect `allowlist ok`. On `STOP`, set one to 61 IPv4 or IPv6 addresses or CIDRs, separated
+by single spaces with none before or after, and repeat this section.
 
 ## 4. Fresh install or upgrade?
 
