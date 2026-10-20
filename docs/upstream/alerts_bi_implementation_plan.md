@@ -73,6 +73,10 @@ Standalone CLI `report` must acquire the same lock before run-id/team lookup and
 through all file writes. Pause after SQL rendering but before writing to the configured
 output root: deletion must return 409, then succeed after reporting finishes without
 leaving recreated files. Verify both selection modes and lock release on write failure.
+Since 2026-10-20 deletion beside a worker job for another run goes ahead without the shared
+lock, locking that job's row (design section 7.12). Verify that a pending job and a paused
+running job leave another run deletable, still refuse their own run, and that the job then
+completes.
 
 ## Source ownership amendment — 2026-10-12
 
@@ -147,6 +151,8 @@ Allow an empty v1 operator list for migrated teams and a nullable v2 operator fo
 ### 2.3 Elasticsearch reader
 
 Implement separate v1 and v2 queries using the selected team's operators and the exact run window. Support pagination so result size does not change correctness.
+
+Filter operators with a `terms` query on `operator.keyword`, not on `operator`. Production maps `operator` as analyzed `text` with a `keyword` subfield in both indices, so a filter on the analyzed field misses any operator containing an uppercase letter (design section 1.3, amended 2026-10-19). The scale probe's operator filter and the Kibana panels use the same subfield.
 
 Capture `run_at` once, use UTC throughout, and query the exact half-open interval from `run_at - 168 hours` through but excluding `run_at`. Assign rows to UTC calendar dates and persist exact boundaries and covered hours for partial first and last buckets.
 

@@ -1,5 +1,59 @@
 # Alerts BI — Design Document
 
+## Console log format — accepted 2026-10-20
+
+The product owner approved this format on 2026-10-20, after reporting that the logs did not
+explain what the services and workers were doing and left out details an investigation needs
+([decision 008](../decisions/008-console-log-format.md)). It changes how records look and which
+records exist, not what they may contain. Section "Configuration and security" of the
+implementation plan and `outputs.md` still allow identifiers, hashes, counts, timings and
+redacted errors only.
+
+* **Line.** `<UTC time> <LEVEL> <process> <event> <message>  <key=value ...>  [<context>]`,
+  one record per line. For example:
+  `2026-10-20 14:05:58.330Z INFO  worker es.read_schema     Read 48,213 v1 rows in 49 pages, 47.3s (Elasticsearch 31.0s)  index=appchi-v1  [team=payments-core run=3f9a1c2b4d5e6f70 job=7c1e9a2f]`.
+  The event keeps its stable dotted name. The message is a plain-English sentence with grouped
+  numbers, short durations and UTC times. Fields the message does not mention follow it.
+* **Process.** `ui` (the console), `worker` (run-worker), `weekly`, `migrate` (`db setup` and
+  `db migrate`), `cli` (every other command) and `portal`.
+* **Context.** Team, run, job, backfill, model batch and request identifiers are bound once
+  for a piece of work and appear on every record inside it, including Elasticsearch, model
+  and SQL records. The console shows the first 16 characters of a run id (as the CLI and
+  console do), 8 of a job or backfill id and 12 of a batch id. The run's current `stage`
+  (`registry`, `es:v1`, `analysis:v1`, `checkpoint`, `llm`, `assemble`, `persist`) appears
+  only on warnings and errors.
+* **Levels.** Error: something a person or the schedule asked for did not happen (a job, run
+  or week failed, or a server error). Warn: the work went on in a worse state (a retry, an
+  exhausted model batch whose alerts stay unassessed, a recovered interrupted job, a held or
+  skipped week, a panel field suppression cannot read, unencrypted SQL). Info: a step started,
+  finished or produced an outcome. Debug: each model batch that succeeded and each successful
+  page read.
+* **Beginnings and ends.** A job, analysis, Elasticsearch read, model assessment, persistence,
+  migration and weekly invocation each record their end with duration and counts. A failure
+  names the stage, the time spent and the consequence ("marked failed", "the run continues").
+  Elasticsearch reads and model assessment record progress every 30 seconds.
+* **Errors.** The type and redacted message (at most 300 characters, URL credentials removed),
+  the chain of causes with where each began, and this application's frames as
+  `file:line in function`, innermost first, with library frames counted. No source text and
+  no local values.
+* **Worker.** It records its configuration when it starts (database, SQL host, Elasticsearch
+  host and indexes, model, registry and version) and, after 15 minutes without work, why it is
+  idle (nothing queued, backfill weeks waiting for the weekly job, or the execution lock held).
+* **Requests.** Each HTTP request gets an id, returned in `X-Request-ID` and bound to every
+  record made while it is handled, and one `http.request` record. Successful reads, and reads
+  of a missing page or method, are debug. Writes and other refusals are info. Server errors
+  are error, with the exception, and uvicorn does not report the same exception again. Every
+  refusal the console shows the operator is also recorded (`console.refused`).
+* **Output and settings.** Every record goes to stderr and stdout stays for command output.
+  `LOG_LEVEL` keeps debug, info, warn (or warning) and error, default info. `LOG_FORMAT` is
+  `console` (default) or `json`: one object per line with `ts`, `level`, `proc`, `event`,
+  `msg`, the full identifiers, every field and a structured `exception`. Colour is used only on
+  a terminal; `NO_COLOR` turns it off and `FORCE_COLOR` on. An unknown value falls back to the
+  default with a `log.settings_invalid` warning. Warnings and errors that libraries write
+  through Python logging (uvicorn, the Elasticsearch transport) use the same format.
+* **Libraries.** Shared 0.1.9 provides the format and the request logging, and operations
+  0.2.8 pins it. Admin adopts both; the portal vendors the shared wheel.
+
 ## Admin console without login — accepted 2026-10-19
 
 The product owner decided on 2026-10-19 to remove the login to the admin console entirely and
@@ -442,7 +496,7 @@ Notes that matter for measurement:
 * `severity` does **not** map 1:1. `warning` maps to `warning` cleanly; `error` and `major` must be re-decided per alert against the Wake-Up Test. There is deliberately **no published mapping** — each team decides per alert using the guide.
 * `impact` and `runbook_url` are optional today and will be made required later. The standard is therefore **not enforced at ingest**, which is precisely why a BI layer is needed.
 * **The v2 `key_field` hash is built from every field *except* `status`, `message`, and the time fields** (confirmed 2026-08-27). Two consequences: the key is stable across 12-hour re-fires and across `firing` -> `resolved`, so `distinct_alerts` is meaningful; but the key *does* change when `severity`, `impact`, or `runbook_url` change — which is exactly what phase 1 and phase 2 ask teams to do. See section 3.7.
-* **Index names and field mappings are exactly as defined in this table and in the mock indices** `appchi-v1` / `appchi-v2` (confirmed 2026-08-27). No renaming to reconcile.
+* **Index names and field mappings are exactly as defined in this table and in the mock indices** `appchi-v1` / `appchi-v2` (confirmed 2026-08-27). No renaming to reconcile. **Amended 2026-10-19 (`operator` mapping):** this was inaccurate for `operator`. In production, both `appchi-v1` and `appchi-v2` map `operator` as analyzed `text` with a `keyword` subfield (`operator.keyword`); it is not a keyword-only field. A `terms` filter on the analyzed `operator` field compares lowercased tokens, so any registry operator containing an uppercase letter (for example `893_Lannister`) matched no rows. Operator matching remains exact and case-sensitive (section 3.1): the engine reader, the scale probe and the Kibana panels filter on `operator.keyword`, never on the analyzed field. The mock generator now mirrors the production mapping (`text` plus a `keyword` subfield), so the mock reproduces this behavior ([alerts-bi-admin PR #18](https://github.com/venaTeam/alerts-bi-admin/pull/18)). Field names are unchanged; only the `operator` mapping and the field that exact filters address are corrected.
 
 ### 1.4 Migration phases
 
@@ -1209,7 +1263,7 @@ remain append-only while their parent run exists. Migration `009_run_deletion` p
 decision cleanup only in the owning connection's explicit whole-run deletion scope;
 a checked parent foreign key rejects orphan inserts, and updates remain forbidden. Deletion
 uses the manual gate, scheduler lock, model-review lock and run-row lock; active work is
-refused. The run id is logged without alert content (the actor was dropped on 2026-10-19).
+refused (narrowed to the run's own work on 2026-10-20, below). The run id is logged without alert content (the actor was dropped on 2026-10-19).
 
 **Concurrency clarified 2026-10-13:** manual HTTP/API runs, manual CLI runs and reports, the weekly
 schedule and deletion share the database's existing `alerts-bi-weekly` SQL session lock.
@@ -1228,6 +1282,20 @@ tracked; deleting the run leaves them, including `alert_worklist.csv`, until rem
 remain because other runs can use them. Deleting a published run removes it from the portal
 and all its download routes. The weekly schedule may recreate a deleted due week; deletion
 does not disable enrollment. No stored run is deleted as part of installing this change.
+
+**Amended 2026-10-20 (product owner): a running job no longer blocks deleting other runs.**
+The worker holds the shared `alerts-bi-weekly` lock for a whole job, so an operator could not
+delete any run while one job (or a long backfill) ran. Deletion now refuses only work on the
+run itself: that run's own pending, running or queued job, its active model review, or a
+publication change holding its row. When the shared lock is free, deletion takes it as
+before. When it is taken and a job holds the active slot for another run, deletion goes
+ahead without it: while a job holds the slot, CLI runs and reports, the weekly schedule,
+acceptance verification and synchronous HTTP runs refuse to start, so the lock's holder can
+only be the worker, and deletion locks that job's row so the worker cannot finish and hand
+the lock on until the deletion commits. When the lock is taken and no job holds the slot,
+something without a job record (a CLI run or report, the weekly schedule) holds it, and
+deletion still returns 409, so a CLI rerun or report of the same run keeps blocking its
+deletion as the 2026-10-13 clarification requires.
 
 ### 7.13 LLM review quality, evaluation and durable audit
 
