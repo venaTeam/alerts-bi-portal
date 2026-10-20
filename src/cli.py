@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from alerts_bi_shared.logging_setup import log, redact_error
+from alerts_bi_shared.config.env import load_dotenv
+from alerts_bi_shared.logging_setup import configure_logging, log
 
 from .config import load_portal_settings
 from .server import serve
@@ -20,10 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # LOG_LEVEL and LOG_FORMAT may come from .env, so read it before configuring logging.
+    load_dotenv()
+    configure_logging("portal")
     settings = load_portal_settings(host=args.host, port=args.port)
-    sys.stdout.write(
-        f"alerts-bi-portal on http://{settings.host}:{settings.port} (ctrl-c to stop)\n"
-    )
     serve(settings)
     return 0
 
@@ -32,7 +33,5 @@ def run_cli() -> None:
     try:
         sys.exit(main())
     except Exception as exc:
-        error = redact_error(exc)
-        log.error("portal.cli_failed", error=error)
-        sys.stderr.write(f"{error}\n")
+        log.error("portal.cli_failed", "The portal stopped with an error", exc=exc)
         sys.exit(1)

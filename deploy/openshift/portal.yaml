@@ -57,7 +57,7 @@ objects:
                 - name: SQL_PASSWORD
                   valueFrom: {secretKeyRef: {name: "${PORTAL_SQL_SECRET}", key: SQL_PASSWORD}}
               # SQL_HOST, SQL_PORT, SQL_DATABASE, SQL_ENCRYPT, SQL_TRUST_SERVER_CERTIFICATE,
-              # SQL_REQUEST_TIMEOUT_MS and LOG_LEVEL; the portal ignores the other keys.
+              # SQL_REQUEST_TIMEOUT_MS, LOG_LEVEL and LOG_FORMAT; the portal ignores the other keys.
               envFrom:
                 - configMapRef: {name: alerts-bi-config}
               ports: [{containerPort: 8100, name: http}]

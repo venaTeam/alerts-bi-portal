@@ -29,7 +29,7 @@ readers --HTTPS--> Route alerts-bi-portal (PORTAL_ROUTE_ALLOWLIST, edge TLS)
 | Object | Kind | Created by | Purpose |
 |---|---|---|---|
 | `alerts-bi-portal` | Deployment, Service, Route, ServiceAccount | `portal.yaml` | The portal and its HTTPS entry |
-| `alerts-bi-config` | ConfigMap | the admin deployment | `SQL_HOST`, `SQL_PORT`, `SQL_DATABASE`, `SQL_ENCRYPT`, `SQL_TRUST_SERVER_CERTIFICATE`, `SQL_REQUEST_TIMEOUT_MS`, `LOG_LEVEL` |
+| `alerts-bi-config` | ConfigMap | the admin deployment | `SQL_HOST`, `SQL_PORT`, `SQL_DATABASE`, `SQL_ENCRYPT`, `SQL_TRUST_SERVER_CERTIFICATE`, `SQL_REQUEST_TIMEOUT_MS`, `LOG_LEVEL`, `LOG_FORMAT` |
 | `alerts-bi-secrets` | Secret | the admin deployment | `SQL_USER` and `SQL_PASSWORD` (the default `PORTAL_SQL_SECRET`) |
 | `alerts-bi-portal-sql` | Secret | you, only for a reader-only login | `SQL_USER` and `SQL_PASSWORD` of that login |
 | `alerts-bi-ca-bundle` | ConfigMap | the admin deployment, optional | Mounted so a shared `SSL_CERT_FILE` setting resolves |
@@ -301,7 +301,7 @@ older than shared 0.1.8 while encoded team links (`/teams/~...`) are in use.
 - Deploy admin, with its migrations, before the portal of the same release.
 - The portal only reads `SQL_DATABASE`, the admin database. It never gets its own database
   setting, Elasticsearch or model credentials, or the admin registry. The non-secret
-  `alerts-bi-config` keys it receives besides `SQL_*` and `LOG_LEVEL` are ignored.
+  `alerts-bi-config` keys it receives besides `SQL_*`, `LOG_LEVEL` and `LOG_FORMAT` are ignored.
 - Keep both allowlists: the Route's for readers, the application's for the router and the cluster.
 - Never run migrations, `db` commands or any writer from the portal image.
 - Secrets live only in the cluster: never commit filled value files or paste them anywhere.
