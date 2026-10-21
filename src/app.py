@@ -26,7 +26,8 @@ from typing import Annotated
 from alerts_bi_shared.db.connection import Database, WebDatabasePool
 from alerts_bi_shared.insights import TeamSummary
 from alerts_bi_shared.insights.summary import summarize
-from alerts_bi_shared.logging_setup import log, redact_error
+from alerts_bi_shared.logging_setup import log
+from alerts_bi_shared.request_logging import RequestLogMiddleware
 from alerts_bi_shared.team_urls import decode_team_id
 from alerts_bi_shared.versions import APP_VERSION
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
@@ -123,7 +124,11 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         except HTTPException:
             raise
         except Exception as exc:
-            log.error("portal.database_unavailable", error=redact_error(exc))
+            log.error(
+                "portal.database_unavailable",
+                "The review data cannot be read; the reader sees a 503",
+                exc=exc,
+            )
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "The review data is unavailable right now."
             ) from None
@@ -134,7 +139,11 @@ def build_portal(settings: PortalSettings) -> FastAPI:
     ) -> Response:
         client = request.client.host if request.client else None
         if not client_allowed(client, networks):
-            log.info("portal.client_refused", client=client)
+            log.info(
+                "portal.client_refused",
+                "Refused {client}: outside PORTAL_ALLOWED_NETWORKS",
+                client=client,
+            )
             response: Response = PlainTextResponse("Forbidden", status_code=403)
         elif request.method not in READ_METHODS:
             response = PlainTextResponse(
@@ -387,4 +396,6 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             )
         return HTMLResponse(tabs.alert_page(reviews, selected, detail))
 
+    # Added last, so it is outermost: it also sees the guard's own refusals.
+    app.add_middleware(RequestLogMiddleware)
     return app
