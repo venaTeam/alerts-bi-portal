@@ -252,6 +252,47 @@ def test_the_review_note_leads_the_overview() -> None:
     assert page.index('class="note"') < page.index("Key findings")
 
 
+def _operators_card(operators: tuple[tuple[str, ...], str | None] | None) -> str:
+    page = tabs.overview_page(
+        REVIEWS, dataclasses.replace(SELECTED, operators=operators), summary()
+    )
+    start = page.find('aria-labelledby="operators-title"')
+    return "" if start < 0 else page[start : page.index("</section>", start)]
+
+
+def test_the_overview_lists_the_operators_the_week_ran_with() -> None:
+    v1 = ("batch", "BATCH", HOSTILE, "d", "e", "f", "g", "h")
+    card = _operators_card((v1, "pay-core"))
+    chips = re.findall(r'<span class="chip">([^<]*)</span>', card)
+    assert chips == [
+        "batch",
+        "BATCH",
+        "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "pay-core",
+    ]
+    assert "8 operators" in visible(card)
+    assert card.index("<summary>Show 2 more</summary>") < card.index(">g<")
+    page = tabs.overview_page(
+        REVIEWS, dataclasses.replace(SELECTED, operators=(v1, "pay-core")), summary()
+    )
+    assert page.index("operators-title") > page.index("Phase")
+    for word in ("registry", "run_id"):
+        assert word not in card.lower()
+
+
+def test_the_operators_card_explains_an_empty_or_unknown_list() -> None:
+    assert "Not set yet" in _operators_card((("one",), None))
+    assert "None" in visible(_operators_card(((), "v2-only")))
+    empty = visible(_operators_card(((), None)))
+    assert "No operators were listed for this team, so this week has no alerts." in empty
+    assert _operators_card(None) == ""
+
+
 # ------------------------------------------------------------------ fix list
 
 

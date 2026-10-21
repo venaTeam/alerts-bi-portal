@@ -6,7 +6,9 @@ isolation and weekly totals. It cannot execute runs, publish reviews or record d
 
 Each team week has seven tabs: Overview, Fix list, Volume, Dashboards, Migration,
 History and Slides. Problems have plain-language names. The week menu keeps the selected
-tab, and older work-list links redirect to the Fix list with their filters intact.
+tab, and older work-list links redirect to the Fix list with their filters intact. The
+Overview lists the operators the week was run with, from `portal_reviews` (admin migration
+`020_portal_review_operators`).
 
 Python 3.12+ and Poetry 2.3.1 are required. From this repository:
 

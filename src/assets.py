@@ -30,6 +30,13 @@ STYLESHEET: Final = (
 .app-chip{overflow-wrap:anywhere}
 .app-chip .app-show-more,.app-chip .app-show-less{font-size:13px;line-height:inherit}
 .menu-list.filter-popover{width:max-content}
+.ops{display:flex;flex-direction:column;gap:10px;margin:0}
+.ops dt{display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--ink-2);margin-bottom:6px}
+.ops dd{margin:0}
+.op-list{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+.op-list .chip{white-space:normal;overflow-wrap:anywhere;font-family:var(--mono);background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
+.ops details summary{cursor:pointer;width:fit-content;font-size:12.5px;margin-top:6px}
+.ops details[open] summary{margin-bottom:6px}
 @supports(top:anchor(bottom)){
   .app-popover.filter-popover,.menu-list.filter-popover{inset:auto;top:anchor(bottom);margin:8px 0 0;position-try-fallbacks:flip-block,flip-inline}
   .app-popover.filter-popover{position-anchor:--application-filter;left:anchor(left)}
