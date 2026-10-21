@@ -54,7 +54,8 @@ You need:
   repository root, then `podman push <registry>/<repository>:<commit>`.
 - A finished admin deployment of the same release: `deployment/alerts-bi-admin` rolled out with
   every migration applied. The portal of a release needs that release's migrations; for example,
-  the shared 0.1.8 team links need `017_case_sensitive_teams`.
+  the shared 0.1.8 team links need `017_case_sensitive_teams`, and the Overview operators card
+  needs `020_portal_review_operators`.
 
 Set up your shell once per session:
 

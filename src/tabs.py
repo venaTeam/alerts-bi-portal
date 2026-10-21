@@ -72,6 +72,8 @@ SCHEMAS: Final = ("v1", "v2")
 TOP_LOUD: Final = 4
 TOP_LISTED: Final = 8
 APPLICATION_CHIPS_VISIBLE: Final = 3
+#: Operator values the Overview card shows before "Show N more".
+OPERATORS_VISIBLE: Final = 6
 #: Phase-2 readiness, in the order a team should work through it: the gap that blocks
 #: completion first.
 READINESS_ORDER: Final = ("R9", "R8", "R10")
@@ -384,6 +386,44 @@ def _phase_card(selected: Review, summary: TeamSummary) -> str:
     )
 
 
+def _operator_list(values: Sequence[str]) -> str:
+    def items(chunk: Sequence[str]) -> str:
+        return "".join(f'<li><span class="chip">{h(value)}</span></li>' for value in chunk)
+
+    shown = f'<ul class="op-list">{items(values[:OPERATORS_VISIBLE])}</ul>'
+    rest = values[OPERATORS_VISIBLE:]
+    if not rest:
+        return shown
+    return (
+        f"{shown}<details><summary>Show {len(rest):,} more</summary>"
+        f'<ul class="op-list">{items(rest)}</ul></details>'
+    )
+
+
+def _operators_card(selected: Review) -> str:
+    """The operators this published week ran with (design "Team operators on the team page")."""
+    if selected.operators is None:
+        return ""
+    v1, v2 = selected.operators
+    if not v1 and not v2:
+        body = (
+            '<p class="sub">No operators were listed for this team, so this week has no alerts.</p>'
+        )
+    else:
+        body = (
+            '<dl class="ops">'
+            f"<div><dt>{_schema_chip('v1')}{plural(len(v1), 'operator')}</dt><dd>"
+            + (_operator_list(v1) if v1 else '<span class="sub">None</span>')
+            + f"</dd></div><div><dt>{_schema_chip('v2')}operator</dt><dd>"
+            + (_operator_list([v2]) if v2 else '<span class="sub">Not set yet</span>')
+            + "</dd></div></dl>"
+        )
+    return (
+        '<section class="card pad stack" aria-labelledby="operators-title">'
+        f'<div class="eyebrow" id="operators-title">Operators</div>{body}</section>'
+    )
+
+
 def _loudest(selected: Review, summary: TeamSummary) -> str:
     alert = summary.biggest
     if alert is None:
@@ -418,7 +458,8 @@ def overview_page(reviews: Sequence[Review], selected: Review, summary: TeamSumm
         f'<div class="two">{_schema_card(summary, "v1")}{_schema_card(summary, "v2")}</div>'
         f'<section class="card pad stack"><h2>Key findings</h2>{_findings(selected, summary)}'
         "</section></div>"
-        f'<aside class="colside">{_phase_card(selected, summary)}{_loudest(selected, summary)}'
+        f'<aside class="colside">{_phase_card(selected, summary)}{_operators_card(selected)}'
+        f"{_loudest(selected, summary)}"
         f"{cta}</aside></div>"
     )
     return _page(reviews, selected, "overview", body)

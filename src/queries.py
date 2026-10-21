@@ -72,6 +72,9 @@ class Review:
     readiness_pct: float | None
     totals: dict[str, SchemaTotals] = field(default_factory=dict)
     applications: ApplicationFilter = field(default_factory=ApplicationFilter)
+    #: The operators this week ran with (v1 operators, v2 operator), from the run's frozen
+    #: registry entry; None when the stored entry does not list them.
+    operators: tuple[tuple[str, ...], str | None] | None = None
 
     @property
     def week(self) -> date:
@@ -91,7 +94,7 @@ class TeamSummary:
 
 _REVIEW_COLUMNS = (
     "r.team_id, r.team_display_name, r.run_id, r.window_start, r.window_end, r.published_at, "
-    "r.review_note, r.phase_derived, r.phase2_readiness_pct"
+    "r.review_note, r.phase_derived, r.phase2_readiness_pct, r.v1_operators, r.v2_operator"
 )
 _TOTAL_COLUMNS = ", ".join(f"t.{name}" for name in SchemaTotals.__dataclass_fields__)
 
@@ -109,7 +112,19 @@ def _review(row: dict[str, Any], totals: dict[str, SchemaTotals]) -> Review:
         phase=str(row["phase_derived"]),
         readiness_pct=None if readiness is None else float(readiness),
         totals=totals,
+        operators=_operators(row.get("v1_operators"), row.get("v2_operator")),
     )
+
+
+def _operators(v1: Any, v2: Any) -> tuple[tuple[str, ...], str | None] | None:
+    """portal_reviews carries v1_operators as JSON array text; anything else is unknown."""
+    try:
+        values = json.loads(v1) if isinstance(v1, str) else None
+    except ValueError:
+        return None
+    if not isinstance(values, list):
+        return None
+    return tuple(str(value) for value in values), None if v2 is None else str(v2)
 
 
 def _group_reviews(rows: list[dict[str, Any]]) -> list[Review]:
