@@ -64,12 +64,16 @@ never edit a released wheel in place.
 Imported from `venaTeam/alerts-bi` at `c518eeaeb5a3ecb35b5348828300454379e7d535`.
 The merged portal-tab update from `a9e4495` (PR #12) was restored on 2026-10-08;
 the initial extraction used code from before that update. Shared presentation is supplied by the vendored
-`alerts-bi-shared` 0.1.9 wheel. Standalone imports and schema readiness remain intact.
+`alerts-bi-shared` 0.1.10 wheel. Standalone imports and schema readiness remain intact.
+Since shared 0.1.10, `LOG_FORWARD_URL` also sends the portal's records to the optional log
+collector the admin deployment runs (design "Log shipping to Elasticsearch"), which writes them
+to the `<prefix>-portal-*` indices. That is plain HTTP to a Fluent Bit Service in the namespace;
+the portal still has no Elasticsearch client.
 Since shared 0.1.9 the portal logs in the console format (design "Console log format",
 2026-10-20): one readable line per record on stderr, one `http.request` line per refused or
 failed request with an id also returned in `X-Request-ID`, and successful page reads only at
 `LOG_LEVEL=debug`. `LOG_FORMAT=json` writes one JSON object per line instead.
-TLS enforcement introduced in shared 0.1.7 and retained through 0.1.9 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS (the server
+TLS enforcement introduced in shared 0.1.7 and retained through 0.1.10 with pymssql 2.4.4 applies `SQL_ENCRYPT=true` as required TLS (the server
 certificate is not validated, so it stops passive reading but not an active interceptor),
 rejects unknown `SQL_ENCRYPT` values and `SQL_TRUST_SERVER_CERTIFICATE=false` at startup, and
 logs `sql.unencrypted` once at startup when encryption is off.
