@@ -117,14 +117,15 @@ def _review(row: dict[str, Any], totals: dict[str, SchemaTotals]) -> Review:
 
 
 def _operators(v1: Any, v2: Any) -> tuple[tuple[str, ...], str | None] | None:
-    """portal_reviews carries v1_operators as JSON array text; anything else is unknown."""
+    """portal_reviews carries v1_operators as JSON array text of strings; anything else is
+    unknown, so a stray null is never shown as text."""
     try:
         values = json.loads(v1) if isinstance(v1, str) else None
     except ValueError:
         return None
-    if not isinstance(values, list):
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         return None
-    return tuple(str(value) for value in values), None if v2 is None else str(v2)
+    return tuple(values), None if v2 is None else str(v2)
 
 
 def _group_reviews(rows: list[dict[str, Any]]) -> list[Review]:

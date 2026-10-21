@@ -33,6 +33,6 @@ def test_operators_keep_exact_values_and_order() -> None:
 
 
 def test_a_snapshot_without_an_operator_list_is_unknown() -> None:
-    for value in (None, "not json", '{"a": 1}', "5"):
+    for value in (None, "not json", '{"a": 1}', "5", '["ok", null]', '["ok", 5]'):
         row = {**ROW, "v1_operators": value, "v2_operator": None}
         assert queries._review(row, {}).operators is None
