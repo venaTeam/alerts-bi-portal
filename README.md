@@ -69,7 +69,7 @@ the initial extraction used code from before that update. Shared presentation is
 `alerts-bi-shared` 0.1.10 wheel. Standalone imports and schema readiness remain intact.
 Since shared 0.1.10, `LOG_FORWARD_URL` also sends the portal's records to the optional log
 collector the admin deployment runs (design "Log shipping to Elasticsearch"), which writes them
-to the `<prefix>-portal-*` indices. That is plain HTTP to a Fluent Bit Service in the namespace;
+to the `<prefix>-portal` data stream. That is plain HTTP to a Fluent Bit Service in the namespace;
 the portal still has no Elasticsearch client.
 Since shared 0.1.9 the portal logs in the console format (design "Console log format",
 2026-10-20): one readable line per record on stderr, one `http.request` line per refused or
