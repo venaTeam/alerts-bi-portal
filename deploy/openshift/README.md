@@ -304,7 +304,7 @@ older than shared 0.1.8 while encoded team links (`/teams/~...`) are in use.
   setting, Elasticsearch or model credentials, or the admin registry. The non-secret
   `alerts-bi-config` keys it receives besides `SQL_*` and `LOG_*` are ignored. When the admin
   runbook's section 15 sets `LOG_FORWARD_URL`, restart the portal so it also sends its records
-  to the log collector (`<prefix>-portal-*` indices).
+  to the log collector (the `<prefix>-portal` data stream).
 - Keep both allowlists: the Route's for readers, the application's for the router and the cluster.
 - Never run migrations, `db` commands or any writer from the portal image.
 - Secrets live only in the cluster: never commit filled value files or paste them anywhere.
