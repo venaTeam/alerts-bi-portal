@@ -1,5 +1,222 @@
 # Alerts BI — Design Document
 
+## Key fields up to 800 characters — accepted 2026-10-28
+
+On 2026-10-28 the product owner reported that sending teams' `key_field` values can reach 800
+characters and asked for the database to hold them. Every stored `key_field` column was
+NVARCHAR(512), so a run with a longer key failed to persist and rolled back. This is the
+"values longer than their columns" item that "Fixed-width alert identity keys" below left
+open, for `key_field`. Approved behavior:
+
+* **Width.** Migration `022_long_key_fields`, which follows `021_parallel_run_slots`, stores
+  `key_field` as NVARCHAR(800) in `alert_findings`, `llm_verdicts`, `finding_decisions` and
+  `run_alert_list`, still `Latin1_General_100_BIN2` and NOT NULL. `application` stays
+  NVARCHAR(256). A key longer than 800 UTF-16 code units still fails the run when stored.
+* **Primary keys.** The computed `identity_hash` reads `key_field`, which blocks the column
+  change. 022 drops `pk_alert_findings`, `pk_llm_verdicts` and both hash columns, widens the
+  columns, and recreates the hash columns and keys with the 018 definitions. The hash covers
+  the value, not the declared width, so every stored identity keeps its hash. Identity,
+  verdict reuse and decisions are unchanged.
+* **Indexes.** `ix_finding_decisions_identity`, `ix_run_alert_list_order` and
+  `ix_run_alert_list_events` had `key_field` as a key column. At 800 characters beside a
+  256-character application an entry could reach 2,252 bytes, past SQL Server's 1,700-byte
+  limit for a nonclustered index entry, so an insert of a long identity would fail with error
+  1946. Each keeps its other key columns in the same order and carries `key_field` as an
+  included column, which has no size limit. Work lists still order by `key_field` where they
+  did and return the same rows in the same order. SQL Server now sorts the ties among the
+  remaining key columns itself, over the rows the page's count already reads.
+* **Readers.** 022 refreshes `portal_alerts`, `portal_alert_list` and `portal_decisions`,
+  which expose `key_field` as nvarchar(800); `contracts/sql-views.json` records the width. The
+  admin decision history and the portal's work list, decision lookups and alert page accept
+  and compare keys of 800 characters. With their former 512-character limits the portal
+  would have truncated a longer key in its lookups and refused it in an alert link. The
+  portal change does not need the migration: deploy it no later than admin.
+* **Paging cursors.** The shared seek cursors still accept text values of at most 512
+  characters. When a page's first or last row has a longer key, that page's previous or next
+  link falls back to its page number, which shows the same rows because a stored run does not
+  change. The shared and operations libraries are unchanged.
+
+CSV outputs, console routes, ordering, the trailing-space limitation and every other
+interface are unchanged. 022 rewrites `alert_findings` and `llm_verdicts` once more, as 018
+did, and rebuilds the three indexes, so the migration gate in `openshift-deployment.md`
+applies. Its downgrade is refused: keys longer than 512 characters may then be stored.
+
+## Parallel model requests within a run — accepted 2026-10-27
+
+Until now a run sent its model batches one at a time: each request, and each wait before a
+retry, held up every later batch of the run. On 2026-10-27 the product owner asked for
+parallel model requests within one run, alongside "Parallel runs across teams" below, and
+chose a per-run setting whose default keeps today's behavior. Approved behavior:
+
+* **A setting, default 1.** `LLM_CONCURRENCY` is how many of a run's batches may wait on the
+  model at once, from 1 to 8; another value stops any command that loads the model settings
+  at startup. With 1 a run behaves exactly as before. The setting applies to every run,
+  whatever started it: worker jobs, CLI runs, synchronous `POST /runs` and the weekly
+  schedule. The evaluation script (section 7.13, "Evaluation isolation") still sends one
+  batch at a time.
+* **Each batch is unchanged.** Grouping, the 200-alert ceiling, balanced partitions, the
+  request bytes, the three attempts with identical bytes, the wait before each retry
+  (lengthened by `Retry-After`) and the audit entry committed before every request all stay as
+  section 5.1 and section 7.13 describe. A batch that waits before a retry holds up only
+  itself. The audit journal is still written on the run's one audit connection, which keeps
+  the run's `llm-review` session lock; its writes are short and go one at a time, and only
+  the requests and retry waits overlap.
+* **Results are the same as with the setting at 1.** The run's verdicts, outcomes, stored
+  batch attempts and new cache rows are collected per batch and combined in batch order, so
+  what a run stores, its CSVs and its identifiers do not depend on which request answered
+  first. The per-group log record (`llm.group`) is still written when each batch finishes and
+  keeps its "Group N of M" numbering, so with the setting above 1 those records can appear
+  out of order; the progress and summary records count all batches as before.
+* **Load multiplies with parallel runs.** Each running run sends up to `LLM_CONCURRENCY`
+  requests at once, so with `WORKER_CONCURRENCY` jobs side by side the endpoint can see up to
+  their product (64 at the caps). Section 7.2's capacity measurement is still open: raise the
+  setting one step at a time while watching the endpoint's timeouts, `429` responses and the
+  runs' retried and exhausted batch counts. Each batch honours its own `Retry-After`; there is
+  no shared back-off across batches or runs.
+* **Not a model setting of the run.** The run's model audit records the settings that shape
+  its batches (section 7.12, "a failed run that never stored results can be deleted"), and
+  `LLM_CONCURRENCY` does not shape them, so it is not recorded there: changing it never
+  refuses a week already sent to the model, unlike `LLM_MAX_BATCH_SIZE`.
+* **Recovery is unchanged per batch.** A run interrupted with several requests in flight
+  leaves each of those attempts `started`; when the run is retried, each is reconciled as an
+  interrupted attempt that consumes one of its batch's three attempts, as section 7.13
+  already requires for one.
+
+No migration, route, job state, CSV output, portal view or shared/operations interface
+changes. [Decision 012](../decisions/012-parallel-model-requests.md) records it. Rollback: set
+`LLM_CONCURRENCY=1` and restart; that needs no schema change. No deployment is authorized by
+this amendment.
+
+## Parallel runs across teams — accepted 2026-10-27
+
+Until now the run worker executed one job at a time across all teams, so a long run or a
+multi-week backfill for one team held every other team's New run in the queue. On 2026-10-27
+the product owner asked for parallel runs in the worker and chose two rules: jobs of
+different teams may run at the same time, but never two of one team; and the number of jobs
+at once is a setting whose default keeps today's behavior. Approved behavior:
+
+* **A setting, default 1.** `WORKER_CONCURRENCY` (or `alerts-bi-admin run-worker
+  --concurrency`) is how many jobs the worker runs at once, from 1 to 8; another value stops
+  the worker at startup. With 1 the worker behaves exactly as before. Each further job adds an
+  Elasticsearch scan, model requests and a week of alerts in the worker's memory, so the
+  deployment raises it one step at a time together with the run-worker container's own
+  memory limit (`WORKER_MEMORY_LIMIT`, separate from the weekly job's and admin jobs'
+  `ANALYSIS_MEMORY_*`).
+* **Different teams side by side, one week per team.** A job holds a numbered slot from 1 to
+  the setting while it is pending or running. A team holds at most one slot: a queued job
+  whose team has a job running waits for it, and the next queued job of another team starts
+  instead. The claim order is otherwise unchanged (pending, then queued manual jobs in
+  submission order, then backfill weeks by backfill and oldest week), so one team's backfill
+  still runs oldest week first, and other teams' New runs and backfills no longer wait for it
+  to finish. A slot that frees is filled at once, and new work submitted while jobs run starts
+  within one poll.
+* **The worker stays one process.** One worker in the one admin pod runs the jobs on threads,
+  each on its own SQL connection; the Deployment stays one replica with Recreate. The worker
+  holds the shared execution locks (`alerts-bi-weekly`, `alerts-bi-manual-run`) while any of
+  its jobs runs, and recovers interrupted jobs only before its first claim, so every slot a
+  stopped worker left `running` is reconciled as before. CLI runs and reports, the weekly
+  schedule, acceptance verification and synchronous `POST /runs` therefore still refuse while
+  any job runs, a busy submission is still queued, and deletion still goes ahead only beside
+  jobs for other runs, locking every active job's row (section 7.12). A weekly invocation
+  waiting for a backfill week still keeps the worker off further backfill weeks; it starts
+  when the worker has no job left running.
+* **Results are stored one at a time.** Only the Elasticsearch scan, analysis and model calls
+  overlap. Storing a run (persistence) takes the transaction-scoped SQL lock
+  `alerts-bi-persist`, waiting up to 10 minutes in short requests (the SQL driver ends any
+  statement after `SQL_REQUEST_TIMEOUT_MS`), because the shared verdict and panel-parse
+  caches are written when absent and two big replacements could block each other. A run that
+  cannot take it in time fails with its analysis checkpoint kept, and can be retried.
+* **An infrastructure error drains the worker.** When a job ends in an error the worker cannot
+  record (a lost SQL connection, say), the worker starts no further jobs, lets the others
+  finish, then exits for its supervisor to restart, logging `worker.stopping` with the failed
+  job's team, run, job and slot, and `worker.job_lost` for each further job that fails the
+  same way meanwhile. Ordinary analysis failures still fail only their own job. A claim that
+  fails (a deadlock with a deletion of another run, say: the worker's session takes the lower
+  deadlock priority, so the deletion wins) is logged as `worker.claim_failed` and retried at the
+  next poll; three failures in a row stop the worker in the same way, and so does one that
+  lost the worker's SQL session, because that session held the execution lock.
+* **Migration `021_parallel_run_slots`.** It relaxes the job-state constraint from slot 1 to
+  any slot from 1, keeps one job per slot number and adds a filtered unique index of one active
+  job per team. It changes no rows. Like every migration it is roll-forward only: an image
+  without it stops in its migrate init container. A worker set above 1 refuses to start
+  without it, and console readiness requires it.
+
+The console's queued run says "A team runs one week at a time, and only a set number of teams
+run at once, so this one waits for the runs ahead of it." instead of "Runs go one at a time
+across all teams". Job states, routes, the queue, cancel and retry rules, CSV outputs, portal
+views and the shared/operations libraries are unchanged. This supersedes "Runs execute one at a
+time across all teams" below, "The worker polls SQL and claims at most one submission" and
+"An active-slot constraint also prevents more than one pending/running job" in
+[async-runs.md](async-runs.md), and "The single worker claims work" in
+[backfill.md](backfill.md), which keep their other rules, and qualifies "before the next
+backfill week" there and in the [runtime flow](alerts_bi_flow.md) with "once its own team has no
+run in progress". [Decision 011](../decisions/011-parallel-runs-across-teams.md) records it.
+
+Rollback: set `WORKER_CONCURRENCY=1` on this image and restart the pod, after its running jobs
+finish (a restart interrupts them and they are recovered as failed, as on any restart); that
+needs no schema change. Returning to an image without migration 021 needs the database restore
+of the deployment runbook's rollback section, as for any applied migration. `run-worker --once`
+with the setting above 1 runs only the jobs it claims first, at most one per slot. No
+deployment is authorized by this amendment.
+
+## New runs queue while another run is in progress — accepted 2026-10-26
+
+Runs execute one at a time across all teams (superseded 2026-10-27 by "Parallel runs across
+teams": different teams may run at once, one week per team). Until now a New run submitted while another run
+was in progress was refused with 409 unless a backfill was running, so an operator had to wait
+for an unrelated team's run to finish and submit again. On 2026-10-26 the product owner asked
+that such a run wait its turn instead, and approved these rules:
+
+* **A busy submission is queued.** A manual job submission (the New runs dialog with one week,
+  or `POST /run-jobs`) that finds the active slot taken or the shared execution lock held is
+  accepted as `queued` and holds no slot, whether or not a backfill is in progress, and whatever
+  holds the lock: a job, a CLI run or report, the weekly schedule or a deletion. The worker
+  claims queued manual jobs in submission order after a pending job and before backfill weeks,
+  as [the backfill contract](backfill.md) already defines. A submission that finds the slot and
+  lock free still queues while an older manual job is queued, so a run submitted between the
+  worker's polls cannot start before it. This supersedes the refusal of busy
+  submissions in [async-runs.md](async-runs.md), backfill.md and the redesign's "busy refusal"
+  for one selected week.
+* **A week published while its job waited is not run.** The weekly schedule can store and
+  publish the same run (same team, week, registry and model) while a job for it is queued. When
+  the worker claims a job, manual or backfill week, whose run is published, it marks the job
+  failed ("Not run: this week was published while the run waited. Withdraw it to run it
+  again.") without reading Elasticsearch, instead of reading the whole week and then being
+  refused by persistence while every other team waits. Retrying all of a backfill's failed
+  weeks leaves out weeks that are published now instead of refusing the whole request, and
+  retrying a published week on its own is still refused. The backfill panel follows the same
+  rule: a failed week offers Retry week, and counts toward Retry failed weeks, only while it is
+  not published, so a withdrawn week can be retried again.
+* **One active job per team and week.** A manual submission for a week the team already has
+  queued, pending or running is refused with 409 ("Already queued or running for this team:
+  <week>. Wait for it to finish.", adding "or remove it from the queue" when that job is still
+  queued), busy or not, as backfill admission already does. A second
+  job would run the week again and replace the first result under the same deterministic run
+  ID. Retrying with the same submission key and options still returns the existing job, also
+  when two identical submissions race and one commits while the other waits for the team's
+  queue lock. The week can be submitted again once its job completes, fails or is removed.
+* **A queued run can be removed.** `POST /run-jobs/{job_id}/cancel` also removes a queued
+  manual job, which becomes `cancelled` ("Cancelled before it started."). A job the worker has
+  claimed runs to completion and the console says so. The team page offers Remove on a queued
+  run's panel and in Run submissions. Nothing about who removed it is recorded.
+* **The weekly retry is unchanged.** A weekly invocation that finds the lock or slot busy without
+  an active backfill still refuses at once and the next daily invocation retries; queued manual
+  jobs do not start the backfill wait.
+
+Synchronous `POST /runs`, CLI runs and reports, and acceptance verification still refuse while
+busy (409 or a busy message), because each waits for its own result. The claim order, execution
+locks, active-slot constraint, deletion rules, migrations (no new revision), CSV outputs, portal
+views and shared/operations libraries are unchanged. The queued status text says the run starts
+when the runs ahead of it finish, instead of referring to multi-week runs.
+`contracts/console-openapi.json` records the new 409 description of `POST /run-jobs` and
+`console-http.json` the queueing rule.
+
+Rollback: an earlier image with migration 014 still runs queued manual jobs, but cannot remove
+them, again refuses busy submissions when no backfill is in progress, accepts a second job for a
+week already queued, and runs a week published while it waited until persistence refuses it.
+Rolling back past 014 keeps the existing rule: leave no queued job of any kind ([the worker
+runbook](manual-worker-runbook.md)). No deployment is authorized by this amendment.
+
 ## Team operators on the team page — accepted 2026-10-21
 
 On 2026-10-21 the product owner asked that the team page in both the admin console and the
@@ -260,7 +477,8 @@ downgrade is refused.
 
 Not covered: values longer than their columns (`application` over 256 or `key_field` over 512
 UTF-16 code units) still fail the run when stored. That has not been observed and needs a
-separate decision. The trailing-space limitation recorded below is unchanged.
+separate decision. The trailing-space limitation recorded below is unchanged. (On 2026-10-28
+"Key fields up to 800 characters" above widened `key_field` to 800.)
 
 ## Operator console redesign — accepted 2026-10-19
 
@@ -311,8 +529,9 @@ scoring, prompt text, CSV outputs, portal views and the shared/operations librar
   queued or running, expired and incomplete weeks are not listed, so the console runs a
   published week again only after it is withdrawn. Live, fake or off applies to every week,
   live by default. One selected week is submitted exactly as the former New run: a manual job
-  with the same submission key, busy refusal and queuing during a backfill. Two to twelve weeks
-  are submitted exactly as the former backfill: one team, one active backfill, oldest first,
+  with the same submission key, busy refusal and queuing during a backfill (since 2026-10-26 a
+  busy submission is always queued; see "New runs queue while another run is in progress").
+  Two to twelve weeks are submitted exactly as the former backfill: one team, one active backfill, oldest first,
   completed unpublished. `POST /teams/{team_id}/trigger` accepts repeated `week` dates (or the
   former `run_at`) and dispatches on their count; `POST /teams/{team_id}/backfill` remains for
   compatibility. The JSON trigger, CLI and API still run any Monday week, including a published
@@ -1291,7 +1510,7 @@ This is a convenience wrapper, not the deferred frontend of section 7.4. It exis
 * It performs no analysis of its own. Every endpoint loads the registry, calls the same `execute_run` and `persist_run` the command line calls, or renders a stored run from committed SQL rows. There is no second code path that could drift from the CLI.
 * A run still names one team and never defaults to all of them; an absent team is an error rather than a fan-out.
 * `run_at` is still captured once per run, and the four approved output files are still written exactly as the CLI writes them. Reports are still rendered only from committed SQL.
-* Runs are serialized. Two concurrent requests for one team and clock derive the same deterministic `run_id` and would race to replace each other's rows, so a second concurrent run is refused with `409` rather than queued.
+* Runs are serialized. Two concurrent requests for one team and clock derive the same deterministic `run_id` and would race to replace each other's rows, so a second concurrent run is refused with `409` rather than queued. (Amended 2026-10-26: this still holds for synchronous `POST /runs`; a busy job submission through the console or `POST /run-jobs` is queued, and a second job for a week the team already has queued, pending or running is refused. See "New runs queue while another run is in progress".)
 
 It is built on FastAPI over uvicorn (2026-08-30), as the `alerts_bi.api` package: an application factory, routers grouped by purpose, one service module holding everything that touches the pipeline, the Pydantic wire contract, and the two pages it renders itself. Its settings are configuration and live with the rest of it, in `alerts_bi.config.api`; the lock that serializes runs is runtime state and lives with the code that runs them. The request and response shapes are declared as Pydantic models, so validation happens before a handler runs and the OpenAPI document at `/openapi.json` is generated from the code rather than maintained beside it. The run endpoint is a synchronous `def`, so its minutes of blocking Elasticsearch and SQL work are dispatched to the thread pool instead of stalling the event loop. When the interactive frontend of section 7.4 is designed, this is the seam it grows from.
 
@@ -1421,7 +1640,8 @@ writing, including with model assessment disabled. Standalone CLI `report` holds
 lock before run-id/team lookup through the final file write, preventing reports from
 reappearing after deletion succeeds. The lock uses its own connection, so
 data-connection commits and model-audit lock release cannot end this protection early.
-Contending HTTP runs/deletion return 409; the CLI fails with a busy message. Both success
+Contending HTTP runs/deletion return 409 (since 2026-10-26 a contending job submission is
+queued instead); the CLI fails with a busy message. Both success
 and failure release the lock. Roll out updated manual CLI clients alongside the app;
 an older CLI that does not take the shared lock cannot coordinate with deletion.
 
@@ -1444,7 +1664,32 @@ only be the worker, and deletion locks that job's row so the worker cannot finis
 the lock on until the deletion commits. When the lock is taken and no job holds the slot,
 something without a job record (a CLI run or report, the weekly schedule) holds it, and
 deletion still returns 409, so a CLI rerun or report of the same run keeps blocking its
-deletion as the 2026-10-13 clarification requires.
+deletion as the 2026-10-13 clarification requires. (Amended 2026-10-27, "Parallel runs across
+teams": the worker may hold several slots and keeps the lock while any of its jobs runs;
+deletion locks every active job's row, and refuses only when one of them is the run's own.)
+
+**Amended 2026-10-26: a failed run that never stored results can be deleted.** A run's model
+audit (section 7.13) records its prompt version, model version and settings, including the
+batch cap, under the run id, and refuses a later attempt whose settings differ. The run id
+includes the prompt and model versions but not those settings, so after an operator changes
+`LLM_MAX_BATCH_SIZE` (or the output cap, or the deployment when a model revision is set),
+every further attempt of a week already sent to the model fails. A stored run could already be deleted; a run that failed before storing
+results has no `runs` row, so it could not, and its week could only run again under the old
+settings. Delete run now also accepts such a run, named by its latest submission. The same
+transaction, locks and refusals apply, and it removes the run's submissions, analysis
+checkpoint and run-scoped model audit; shared prompt artifacts and caches remain. The console
+offers it on the failed submission's page, which the team page's run submissions and a
+multi-week run's unpublished failed week now link to (Open). That page also offers deleting a
+stored run whose rerun failed, with the stored run's own confirmation, but only when that
+attempt reran it (the stored run started before the attempt did) and it is unpublished: a stale
+failed attempt never offers deleting a later or published result. The never-stored
+confirmation is refused if the run has stored results by the time it is confirmed, because it
+did not describe deleting them. A run that fails on changed settings tells the operator so:
+"The model settings changed since this week was first sent to the model. Delete this run, then
+run the week again." A weekly-schedule, CLI or synchronous HTTP attempt leaves no submission to
+delete, so its message says to run the week from New runs first; that run fails the same way
+and its submission can then be deleted. The per-run settings check itself is unchanged: one
+audit trail never mixes two batch layouts.
 
 ### 7.13 LLM review quality, evaluation and durable audit
 

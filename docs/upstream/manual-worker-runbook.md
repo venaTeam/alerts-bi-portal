@@ -15,16 +15,59 @@ SQL monitoring can inspect state without acquiring application locks:
 ```sql
 SELECT job_id, team_id, run_id, status, submitted_at, started_at,
        DATEDIFF(SECOND, COALESCE(started_at, submitted_at), SYSUTCDATETIME()) AS age_seconds
-FROM run_jobs WHERE active_slot = 1;
+FROM run_jobs WHERE active_slot IS NOT NULL;
 ```
 
+Since 2026-10-27 (design "Parallel runs across teams") a worker with `WORKER_CONCURRENCY`
+above 1 runs up to that many jobs at once, one per team, so this can return several rows, each
+with its own `active_slot` number; `run.job_started` names the slot. The worker's
+`worker.started` event says how many jobs it runs at once. A queued job whose team already has
+a running job waits for it, while other teams' queued jobs start beside it.
+
+Since 2026-10-26 a New run submitted while another run is in progress waits as a queued row
+outside any backfill, so a stopped or stalled worker also shows as aging queued rows. When an
+operator reports that a New run never started, check those too:
+
+```sql
+SELECT job_id, team_id, run_id, run_at, submitted_at,
+       DATEDIFF(SECOND, submitted_at, SYSUTCDATETIME()) AS waiting_seconds
+FROM run_jobs WHERE status = 'queued' AND backfill_id IS NULL
+ORDER BY submitted_at;
+```
+
+Queued rows that age while no row holds an active slot mean the worker is not claiming
+work, but not necessarily that it is unhealthy: a CLI run, report, deletion or the weekly
+schedule holds the execution lock without a job row, and a weekly invocation covering every
+enrolled team can hold it for a long time. While it claims nothing, a running worker logs
+`worker.idle` every 15 minutes with the reason. The reason "jobs wait for the execution lock (a
+CLI run, report, weekly job or deletion)" means the rows are waiting their turn; find the
+lock's holder before acting. The reason "backfill weeks wait while the weekly job runs" also
+means waiting their turn, for queued New runs as well: a weekly invocation that waited for a
+backfill week holds `alerts-bi-backfill-yield` until its whole run finishes. No `worker.idle`
+event for more than about 15 minutes, while no row holds an active slot, means the worker is
+stopped or stalled. Rows that age behind a long running job are also waiting their turn, as are rows whose team
+has a job running, and every queued row while all slots are taken.
+
 Inspect the run-worker container's restart count and recent run.job_submitted,
-run.job_started, run.job_finished and run.job_failed events.
+run.job_started, run.job_finished and run.job_failed events. run.job_cancelled records a
+queued New run removed from the team page, and run.job_skipped (a warning) records a claimed
+job that was not run because its week was published while it waited; its error summary
+tells the operator to withdraw the week to run it again. worker.stopping (an error) means a job
+hit an error the worker could not record, such as a lost SQL connection: the worker starts no
+further job, lets the others finish and exits, and the container restarts; the job it names is
+then recovered as interrupted, and so is each job a worker.job_lost record names.
+worker.claim_failed (a warning) means claiming the next job failed, typically a deadlock with a
+deletion that the deletion won; the worker retries at its next poll, and three failures in a row
+log worker.stopping instead. A claim that lost the worker's own SQL session (a failover, say)
+logs worker.stopping at once: that session held the execution lock.
 Check ES/SQL/model availability and positive finite ES_REQUEST_TIMEOUT_MS, LLM_TIMEOUT_MS
 and SQL_REQUEST_TIMEOUT_MS settings. SQL's millisecond value is converted to whole seconds:
 use at least 1000 so it does not become the driver's unlimited zero timeout. Defaults are
 60 seconds for SQL/ES and 120 seconds for model requests. A run can contain many requests and
 three model attempts per batch, so these are not a whole-job deadline or heartbeat.
+LLM_CONCURRENCY (1 to 8, default 1) is how many of one run's model requests wait at once;
+each running job sends up to that many. If model timeouts, `429` responses or retried and
+exhausted batches rise after raising it, lower it again and restart; no run needs deleting.
 
 ## Recover a hung or lost worker
 
@@ -40,7 +83,7 @@ three model attempts per batch, so these are not a whole-job deadline or heartbe
    acceptance verification after those sessions close. Do not clear it to run another
    writer; let the compatible worker reconcile first. All run-writing entry points must
    use the updated version. The replacement worker reconciles running jobs only after
-   acquiring those locks. A result
+   acquiring those locks, and reconciles every running job, whichever slot it held. A result
    committed by this attempt becomes completed (amended 2026-10-17: nothing is regenerated;
    its CSVs render from SQL). An uncommitted attempt becomes
    failed with an interruption message. Pending work proceeds normally.
@@ -81,7 +124,8 @@ any kind; an older worker ignores queued rows and leaves them queued indefinitel
 submissions by taking the `alerts-bi-admin` Route out of service while the current pod and its
 run-worker keep running. Cancel or finish active backfills from the team workspace, then let
 the current worker complete every remaining queued job, including New runs that were queued
-behind a backfill week (they do not belong to the backfill, so its Cancel does not remove them).
+behind another run (they do not belong to a backfill, so a backfill's Cancel does not remove
+them; since 2026-10-26 each has its own Remove on the team page).
 If draining is impossible, stop all writers, pass the locked-session checks above, and fail the
 remaining queued rows with a status older versions recognize:
 

@@ -1,5 +1,27 @@
 # Alerts BI — Runtime Flow
 
+## Parallel runs across teams — accepted 2026-10-27
+
+With `WORKER_CONCURRENCY` above 1 (default 1) the run worker runs up to that many jobs at once,
+for different teams, never two weeks of one team. Each free slot takes the first queued job in
+the usual order (pending, New runs by submission, backfill weeks) whose team has no run in
+progress, so a team's jobs still run one at a time (backfill weeks oldest first) while other
+teams' work runs beside them. CLI runs, reports, the weekly schedule and synchronous
+`POST /runs` still refuse while any job runs (a weekly invocation waits only during a
+backfill), and runs store their results one at a time. See design section "Parallel runs across
+teams".
+
+## New runs queue while another run is in progress — accepted 2026-10-26
+
+A New run submitted while any run is in progress is accepted as queued instead of refused, and
+the worker runs it when the runs ahead of it finish, before the next backfill week (since
+2026-10-27, once its own team has no run in progress). A second
+submission for a week the team already has queued, pending or running is refused, and a new
+submission waits behind New runs already queued. A queued run can be removed from the team page
+until it starts; one whose week was published while it waited is marked failed without running.
+Synchronous `POST /runs`, CLI runs, reports and the weekly retry are unchanged. See design
+section "New runs queue while another run is in progress".
+
 ## Decisions page needs-a-decision view — accepted 2026-10-20
 
 The global Decisions page opens on the findings of currently published weeks that have no
@@ -69,6 +91,8 @@ the publication gap override and rejects forged overrides. Permanent run deletio
 SQL run-owned rows transactionally (including decisions in a scoped deletion allowance, with
 migration 009 and a checked parent foreign key). Since 2026-10-17 runs write no report files to clean. Shared caches remain. Active work on
 the run itself is refused; since 2026-10-20 a worker job for another run does not block it.
+Since 2026-10-26 a run that failed before storing results can be deleted too, so its week can
+run again after a model setting such as `LLM_MAX_BATCH_SIZE` changes.
 Scheduler enrollment remains. See design section 7.12 and decision 004 for scope,
 failure handling and the explicit exception to retained audit history.
 
@@ -76,7 +100,8 @@ Manual HTTP/API and CLI runs share the existing SQL session execution lock with 
 scheduling and deletion, from before scanning through persistence and report writing.
 Standalone CLI reports hold it before run-id/team lookup through the final file write.
 Model-off runs hold it too. Its separate connection survives data commits; contention is
-refused promptly and errors release the lock. Updated CLI clients and the app roll out together.
+refused promptly (since 2026-10-26 a contending job submission is queued instead; see the top of
+this document) and errors release the lock. Updated CLI clients and the app roll out together.
 
 ## Source ownership amendment — 2026-10-12
 
@@ -236,6 +261,8 @@ critical, R7 on v2 and R4 outside Grafana. Refusal, incomplete and empty SDK res
 recorded failures; available model/token metadata is retained, with missing usage unknown.
 
 The tool makes at most three attempts in total: the initial request plus two retries. Each retry sends the identical batch as a group. Alerts are never retried individually. If the third attempt fails, the whole batch becomes `unassessed`.
+
+Since 2026-10-27 up to `LLM_CONCURRENCY` batches of one run (default 1) wait on the model at once; each keeps its own attempts and retry waits, and results are combined in batch order. See design section "Parallel model requests within a run".
 
 ### 6.4 Record outcomes
 
