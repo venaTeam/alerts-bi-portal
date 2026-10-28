@@ -129,3 +129,19 @@ def test_legacy_filter_redirect_preserves_the_encoded_team(
         assert response.status_code == 303
         assert response.headers["location"] == f"/teams/{segment}/weeks/{WEEK}/fix?show=all#alerts"
         assert lookup.call_args.args[1] == team
+
+
+@pytest.mark.parametrize(("length", "status"), [(800, 200), (801, 422)])
+def test_the_alert_link_accepts_keys_as_long_as_the_column(
+    routed_client: tuple[TestClient, Mock], length: int, status: int
+) -> None:
+    # key_field is NVARCHAR(800) since admin migration 022 (design 2026-10-28).
+    client, _lookup = routed_client
+    key = ("disk:node-1/" * 70)[:length]
+    response = client.get(
+        f"/teams/team-a/weeks/{WEEK}/alert",
+        params={"schema": "v1", "application": "app", "key": key},
+    )
+    assert response.status_code == status
+    if status == 200:
+        assert cast(Mock, queries.alert_detail).call_args.args[4] == key

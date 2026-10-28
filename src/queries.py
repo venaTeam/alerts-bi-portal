@@ -451,7 +451,7 @@ def worklist(
     details = (
         db.query(
             f"SELECT {_ALERT_COLUMNS} FROM portal_alerts a WHERE run_id=:run_id AND EXISTS ("
-            "SELECT 1 FROM OPENJSON(:identities) WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(512) '$[2]') i "
+            "SELECT 1 FROM OPENJSON(:identities) WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(800) '$[2]') i "
             "WHERE i.s=a.alert_schema AND i.a=a.application AND i.k=a.key_field)",
             {"run_id": run_id, "identities": identities},
         )
@@ -536,7 +536,7 @@ def latest_decisions(
           ON a.alert_schema = d.alert_schema AND a.application = d.application
          AND a.key_field = d.key_field AND a.run_id = :run_id
         WHERE EXISTS (SELECT 1 FROM OPENJSON(:identities)
-          WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(512) '$[2]') i
+          WITH (s NVARCHAR(2) '$[0]', a NVARCHAR(256) '$[1]', k NVARCHAR(800) '$[2]') i
           WHERE i.s=d.alert_schema AND i.a=d.application AND i.k=d.key_field)
         ) SELECT alert_schema,application,key_field,finding_id,state,note,decided_at
         FROM ranked WHERE recency=1
