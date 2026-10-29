@@ -55,6 +55,8 @@ on the retired runs package/image/repository. Apply migrations before consumers.
 | ES_URL, ES_V1_INDEX, ES_V2_INDEX, ES_USERNAME, ES_PASSWORD, ES_CA_CERT, ES_REQUEST_TIMEOUT_MS, ES_PAGE_SIZE, ES_PIT_KEEP_ALIVE, ES_SEARCH_RETRIES, ES_SEARCH_RETRY_BACKOFF_MS | Admin, run worker and weekly execution only |
 | LLM_ENABLED, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_MODEL_REVISION, LLM_TIMEOUT_MS, LLM_MAX_BATCH_SIZE, LLM_MAX_COMPLETION_TOKENS | Admin, run worker and weekly execution only; unchanged model configuration |
 | SSL_CERT_FILE | Optional; set to the mounted CA bundle when the model endpoint uses a private CA (the model client honours it). Never set but empty |
+| LLM_CONCURRENCY | Admin, run worker and weekly execution: model requests one run sends at once, 1 to 8; default 1 (design "Parallel model requests within a run", 2026-10-27). Each running job sends up to this many, so the endpoint can see up to WORKER_CONCURRENCY times this; raise it one step at a time while watching the endpoint |
+| WORKER_CONCURRENCY | Run worker only: jobs it runs at once, 1 to 8, never two for one team; default 1 (design "Parallel runs across teams", 2026-10-27). Raise it one step at a time with the run-worker container's `WORKER_MEMORY_LIMIT`; above 1 needs migration 021 |
 | LOG_LEVEL | debug, info, warn or error; default info |
 | LOG_FORMAT | console (default) for people reading `oc logs`, or json for a log collector that parses each line (design "Console log format", 2026-10-20) |
 | LOG_FORWARD_URL | Optional; unset sends nothing. `http://alerts-bi-logs:9880` once the log collector is deployed (design "Log shipping to Elasticsearch", 2026-10-20) |
@@ -80,7 +82,7 @@ before the UI and manual worker start. It uses the same admin image digest, SQL 
 and credentials, selecting ADMIN_DATABASE when nonempty and otherwise SQL_DATABASE (the CLI
 default is alerts_bi_dev); deployments leave ADMIN_DATABASE unset. It creates SQL_DATABASE
 when absent, then applies only missing revisions after checking the immutable ledger; current
-head is 019_erase_operator_names. No data reset occurs. Before every rollout the runbook lists
+head is 022_long_key_fields. No data reset occurs. Before every rollout the runbook lists
 pending revisions with `db status` from the new image; any pending revision passes the
 migration gate below.
 
@@ -91,7 +93,7 @@ reads of the eight refreshed views, and every query on the seven tables, wait un
 commits. Once it is applied, an earlier admin image's `migrate` init container stops with
 `Can't locate revision identified by '015_case_sensitive_applications'`, and the revision
 refuses to downgrade. Restoring the database is then the only way back to an earlier image.
-Before any rollout containing unapplied revisions 015 to 019 (the migration gate; the
+Before any rollout containing unapplied revisions 015 to 019 or 022 (the migration gate; the
 database owner confirms each item, because the deploying agent cannot):
 
 1. Take one database backup before the first pending revision and confirm that it restores.
@@ -100,7 +102,7 @@ database owner confirms each item, because the deploying agent cannot):
    `daily_metrics`, `daily_rule_counts`, `review_publications`, `finding_decisions`,
    `weekly_review_log`, `run_jobs` and `run_backfills`, plus transaction-log free space.
    Size the window and log capacity for every pending revision, including index rebuilds:
-   015, 016 and 018 each rewrite `alert_findings` and `llm_verdicts`; 017 changes all
+   015, 016, 018 and 022 each rewrite `alert_findings` and `llm_verdicts`; 017 changes all
    eight team-bearing tables listed below. Rehearse against a restored copy of comparable size.
 3. Schedule a maintenance window outside the weekly job's schedule. Tell portal readers that
    pages may wait during the window.
@@ -165,6 +167,24 @@ revision refuses to downgrade because wider identities may then be stored. Recov
 forward-compatible image that knows 018, or the verified pre-migration backup restored with
 its matching image and manifests, under the same authorization rules as 017.
 
+022_long_key_fields (2026-10-28) stores `key_field` as NVARCHAR(800) in `alert_findings`,
+`llm_verdicts`, `finding_decisions` and `run_alert_list`. Until it is applied, a run with a
+`key_field` longer than 512 characters fails with "String or binary data would be truncated"
+and persists nothing. In one transaction it drops pk_alert_findings, pk_llm_verdicts, both
+`identity_hash` columns and the three indexes that had `key_field` in their keys, widens the
+four columns, recomputes the hash for every row of `alert_findings` and `llm_verdicts`,
+rebuilds both clustered keys, recreates the three indexes with `key_field` included and
+refreshes portal_alerts, portal_alert_list and portal_decisions. Every query on the four tables
+and portal reads of those views wait until it commits. Apply the same backup, sizing,
+maintenance-window and no-deadline rules to 022, sizing for one more rewrite of both tables,
+as for 018. If 022 fails, it rolls back completely, earlier revisions remain committed, and
+initialization retries 022. It is roll-forward only: an image without it stops with `Can't
+locate revision identified by '022_long_key_fields'`, and the revision refuses to downgrade
+because longer keys may then be stored. Recovery follows 018. Keep the usual order, admin and
+then the portal of the same release, and deploy the portal right after admin: the earlier portal
+fails the fix tab of a published week that holds a key over 512 characters (HTTP 500) and refuses
+that alert's link (422). The new portal reads keys up to 800 characters and also works before 022.
+
 Keep one replica and Recreate: an upgrade terminates the old UI/worker before creating the
 new pod. A migration failure keeps the application containers unstarted and OpenShift retries
 initialization. Inspect `oc logs <pod> -c migrate` and the pod's init-container status; fix
@@ -192,7 +212,8 @@ the former proxy's objects (the `oauth-proxy` container, the `alerts-bi-admin-ac
 RoleBinding, the `alerts-bi-admin-tls` Secret, `COOKIE_SECRET`, the ServiceAccount's OAuth
 redirect annotation and the Route allowlist annotations), because `oc apply` would keep them.
 
-Keep one UI worker, one replica and one dedicated manual worker. Browser submissions and status
+Keep one UI worker, one replica and one dedicated manual worker (since 2026-10-27 that one
+worker may run up to `WORKER_CONCURRENCY` jobs at once on threads). Browser submissions and status
 checks return promptly; analysis duration is independent of the Route timeout. The
 compatibility POST /runs is still synchronous and retains its existing timeout considerations.
 
@@ -203,6 +224,9 @@ pages offline; the runbook checks `/healthz` through the Route. The worker has n
 Containers run with the restricted security context (no privilege escalation, all capabilities
 dropped, RuntimeDefault seccomp) and memory limits; the analysis containers' 2 GiB default limit
 leaves headroom over the 233 MiB peak measured for 1.2 million events and 20,000 identities.
+Since 2026-10-27 the run-worker container has its own `WORKER_MEMORY_REQUEST` and
+`WORKER_MEMORY_LIMIT` (same defaults), raised with `WORKER_CONCURRENCY`; the weekly job and admin
+jobs keep `ANALYSIS_MEMORY_*`.
 Keep resource limits appropriate to the existing deployment: an upgrade keeps larger running
 limits. The portal Route keeps both the `ip_allowlist` and the older `ip_whitelist` annotation,
 so every 4.x router applies its client allowlist.

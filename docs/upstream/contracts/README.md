@@ -82,3 +82,28 @@ modifying 001–019. It recreates `portal_reviews` with two trailing columns, `v
 registry entry; sql-views.json records them. Earlier columns, other views, CSV outputs, console
 routes and shared/operations interfaces are unchanged. Deploy admin before the portal: the
 portal's readiness probe requires both columns.
+
+The 2026-10-26 queue amendment (design "New runs queue while another run is in progress")
+queues a busy `POST /run-jobs` or one-week console submission instead of refusing it, refuses
+a second job for a week the team already has queued, pending or running, and lets
+`POST /run-jobs/{job_id}/cancel` remove a queued manual job. console-http.json records the rule
+and console-openapi.json the new 409 description of `POST /run-jobs`. Routes, job states,
+migrations, views, CSV outputs and shared/operations interfaces are unchanged.
+
+The 2026-10-27 parallel-runs amendment (design "Parallel runs across teams") appends migration
+021_parallel_run_slots without modifying 001–020. It relaxes `ck_run_jobs_state` from slot 1 to
+any slot from 1 and adds the filtered unique index `ux_run_jobs_team_active` (one active job per
+team); no row, view, column or CSV output changes. console-http.json records the worker's
+`WORKER_CONCURRENCY` (1 to 8, default 1) and the `alerts-bi-persist` storage lock. Routes, job
+states, payloads, portal views and shared/operations interfaces are unchanged.
+
+The 2026-10-28 long-key amendment (design "Key fields up to 800 characters") appends migration
+022_long_key_fields without modifying 001–021. It stores `key_field` as nvarchar(800) in
+`alert_findings`, `llm_verdicts`, `finding_decisions` and `run_alert_list`, recreates the two
+hashed primary keys with unchanged hashes and carries `key_field` as an included column of
+`ix_finding_decisions_identity`, `ix_run_alert_list_order` and `ix_run_alert_list_events`.
+sql-views.json records `key_field` as nvarchar(800) in `portal_alerts`, `portal_alert_list`
+and `portal_decisions`; console-http.json follows the head. CSV outputs, console routes and
+shared/operations interfaces are unchanged. The portal accepts 800-character keys in its
+lookups and alert links. Deploy admin and then the portal of the same release right after it:
+the earlier portal fails on a published week that holds a longer key.

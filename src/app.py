@@ -378,7 +378,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
         request: Request,
         schema: Annotated[str, Query(pattern="^(v1|v2)$")],
         application: Annotated[str, Query(max_length=256)],
-        key: Annotated[str, Query(max_length=512)],
+        key: Annotated[str, Query(max_length=800)],
     ) -> HTMLResponse:
         team_id = _team_id_from_path(team_id)
         with database() as db:
