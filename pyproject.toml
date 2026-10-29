@@ -44,7 +44,7 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src", "tests", "deploy"]
+files = ["src", "tests", "deploy", "changes"]
 strict = true
 warn_unreachable = true
 disallow_any_explicit = false
