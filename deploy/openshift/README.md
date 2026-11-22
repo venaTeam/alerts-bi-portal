@@ -32,6 +32,7 @@ readers --HTTPS--> Route alerts-bi-portal (PORTAL_ROUTE_ALLOWLIST, edge TLS)
 | `alerts-bi-config` | ConfigMap | the admin deployment | `SQL_HOST`, `SQL_PORT`, `SQL_DATABASE`, `SQL_ENCRYPT`, `SQL_TRUST_SERVER_CERTIFICATE`, `SQL_REQUEST_TIMEOUT_MS`, `LOG_LEVEL`, `LOG_FORMAT`, `LOG_FORWARD_URL`, `LOG_FORWARD_LEVEL` |
 | `alerts-bi-secrets` | Secret | the admin deployment | `SQL_USER` and `SQL_PASSWORD` (the default `PORTAL_SQL_SECRET`) |
 | `alerts-bi-portal-sql` | Secret | you, only for a reader-only login | `SQL_USER` and `SQL_PASSWORD` of that login |
+| `alerts-bi-portal-migration` | Secret | you, optional | `PORTAL_MIGRATION_STATUS_TOKEN`, the alerts-migration service token ([alerts-migration hand-off](#alerts-migration-hand-off)) |
 | `alerts-bi-ca-bundle` | ConfigMap | the admin deployment, optional | Mounted so a shared `SSL_CERT_FILE` setting resolves |
 | `alerts-bi-pull` | Secret | the admin deployment, optional | Image pull credentials |
 
@@ -80,6 +81,10 @@ Expect both objects listed and `successfully rolled out`. Otherwise deploy admin
 | `PORTAL_ALLOWED_NETWORKS` | no | Keep the default unless the cluster networks are outside it; see below. Upgrade: the running value (the `PORTAL_ALLOWED_NETWORKS` line of `oc set env deployment/<portal> -n "$NS" --list`), plus `127.0.0.0/8` if it is missing |
 | `PORTAL_SQL_SECRET` | no | `alerts-bi-secrets` until a reader-only login exists ([section 6](#6-reader-only-sql-login)). Upgrade: if the running portal reads `SQL_USER` from another Secret (`oc get deployment <portal> -n "$NS" -o yaml`), copy that Secret's two keys into `alerts-bi-portal-sql` (section 6) and use that name |
 | `PORTAL_PAGE_SIZE` | no | Upgrade: the running value, if set |
+| `PORTAL_MIGRATION_URL` | no | Empty hides the Migrate links. Otherwise the alerts-migration web app's `https://` address; see [alerts-migration hand-off](#alerts-migration-hand-off) |
+| `PORTAL_MIGRATION_API_URL` | no | Empty uses `PORTAL_MIGRATION_URL`, whose web app proxies `/api` |
+| `PORTAL_MIGRATION_STATUS_TIMEOUT` | no | Keep `1.0` (seconds) |
+| `PORTAL_MIGRATION_SECRET` | no | Keep the default; create that Secret only when alerts-migration gives the portal a token |
 | `PORTAL_REPLICAS` | no | Upgrade: the existing portal Deployment's replica count |
 
 The SQL connection itself comes from the admin deployment's `alerts-bi-config` and
@@ -103,6 +108,22 @@ On OVN-Kubernetes the router can also connect from the cluster's internal join s
 (`100.64.0.0/16` unless the cluster changed it), which the default does not include. Section 7
 detects this: the pod log shows `portal.client_refused` with a `100.64.` address. Then add
 `100.64.0.0/16` to `PORTAL_ALLOWED_NETWORKS` and repeat section 5.
+
+### alerts-migration hand-off
+
+With `PORTAL_MIGRATION_URL` set, v1 Grafana alerts get a Migrate link to alerts-migration, and
+the Fix list a "Migrate selected" form that submits there. The portal's form policy then admits
+that address's origin. To also show "✓ Migrated", give the portal the service token
+alerts-migration issued for it:
+
+```bash
+oc create secret generic alerts-bi-portal-migration -n "$NS" --from-literal=PORTAL_MIGRATION_STATUS_TOKEN='<token>'
+```
+
+Each Fix list or alert page then asks `<PORTAL_MIGRATION_API_URL>/api/rules/migration-status`
+once, waiting at most `PORTAL_MIGRATION_STATUS_TIMEOUT` seconds, so the pod needs network access
+to that address. When the call fails, the pod log shows `portal.migration_status_unavailable` and
+the pages show Migrate links instead.
 
 ### Prepare the value file
 
@@ -289,6 +310,8 @@ older than shared 0.1.8 while encoded team links (`/teams/~...`) are in use.
 | Container exits: `PORTAL_ALLOWED_NETWORKS entry ... is not a network` | Fix the value: comma-separated CIDRs |
 | Container exits: `env SQL_ENCRYPT must be one of ...` or `SQL_TRUST_SERVER_CERTIFICATE=false is not supported` | Fix `alerts-bi-config` (admin runbook, SQL encryption) |
 | `/healthz` 503 | The views are missing or behind: check `alerts-bi-admin db status` (admin runbook) and that `SQL_DATABASE` is the admin database |
+| Container exits: `PORTAL_MIGRATION_URL must be an http(s) URL ...` (or `_API_URL`, `_STATUS_TIMEOUT`) | Fix the value in `portal-values.env` and repeat section 5 |
+| No "✓ Migrated" on migrated alerts; pod log `portal.migration_status_unavailable` | The token Secret, the API address or the network path to it; see [alerts-migration hand-off](#alerts-migration-hand-off) |
 | Every page `Forbidden` from inside the allowlist | The router's or node's address is outside `PORTAL_ALLOWED_NETWORKS` (section 3); the pod log shows `portal.client_refused` with the address |
 | Connection refused or reset from a reader's machine | The reader's network is outside `PORTAL_ROUTE_ALLOWLIST` |
 | Browser: `Application is not available` | No ready pod: `oc get pods -n "$NS" -l app=alerts-bi-portal` and the rows above |

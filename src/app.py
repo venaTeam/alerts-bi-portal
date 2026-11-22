@@ -8,17 +8,20 @@ for:
   before routing. There is no form that posts and nothing that writes.
 * **Company network only.** A client whose address is not on the configured allowlist gets
   403. There are no viewer logins.
-* **Scoped browser enhancement.** One local application-selector script; the
-  Content-Security-Policy forbids inline scripts, eval, framing, plugins and inline styles.
+* **Scoped browser enhancement.** Local scripts only (the application selector and the
+  Fix list's selection count); the Content-Security-Policy forbids inline scripts, eval,
+  framing, plugins and inline styles. Forms may submit only here and, when it is set, to
+  alerts-migration.
 
 Every page is rendered from the ``portal_*`` views over the application's SQL
-login; nothing here reaches Elasticsearch, the model, or the run pipeline.
+login; nothing here reaches Elasticsearch, the model, or the run pipeline. The one outbound
+call asks alerts-migration which rules are migrated (:mod:`alerts_bi_portal.migration`).
 """
 
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from typing import Annotated
@@ -38,14 +41,23 @@ from .application_filter import from_request
 from .assets import (
     APPLICATION_FILTER_SCRIPT,
     APPLICATION_FILTER_SCRIPT_PATH,
+    MIGRATE_SELECTION_SCRIPT,
+    MIGRATE_SELECTION_SCRIPT_PATH,
     STYLESHEET,
     STYLESHEET_PATH,
 )
 from .config import IpNetwork, PortalSettings
+from .migration import MigrationStatus, MigrationView, migratable_rule_url
 from .readiness import check_schema
 from .summary_queries import load_portal_summary
 
-__all__ = ["READ_METHODS", "SECURITY_HEADERS", "build_portal", "client_allowed"]
+__all__ = [
+    "READ_METHODS",
+    "SECURITY_HEADERS",
+    "build_portal",
+    "client_allowed",
+    "security_headers",
+]
 
 READ_METHODS = frozenset({"GET", "HEAD"})
 
@@ -59,6 +71,17 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
 }
+
+
+def security_headers(settings: PortalSettings) -> dict[str, str]:
+    """The fixed headers; the "Migrate selected" form may also submit to alerts-migration."""
+    origin = settings.migration_origin
+    if origin is None:
+        return SECURITY_HEADERS
+    policy = SECURITY_HEADERS["Content-Security-Policy"].replace(
+        "form-action 'self';", f"form-action 'self' {origin};"
+    )
+    return {**SECURITY_HEADERS, "Content-Security-Policy": policy}
 
 
 # Query parameters, declared at module level so FastAPI can resolve the annotations.
@@ -96,6 +119,15 @@ def _team_id_from_path(value: str) -> str:
 
 def build_portal(settings: PortalSettings) -> FastAPI:
     pool = WebDatabasePool(settings.sql, settings.database)
+    headers = security_headers(settings)
+    status_url = settings.migration_status_url
+    migration_status = (
+        MigrationStatus(
+            status_url, settings.migration_status_token or "", settings.migration_status_timeout
+        )
+        if status_url
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -153,7 +185,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             )
         else:
             response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
+        for name, value in headers.items():
             response.headers.setdefault(name, value)
         return response
 
@@ -175,6 +207,14 @@ def build_portal(settings: PortalSettings) -> FastAPI:
     def application_filter_script() -> Response:
         return Response(
             APPLICATION_FILTER_SCRIPT,
+            media_type="text/javascript; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.get(MIGRATE_SELECTION_SCRIPT_PATH, include_in_schema=False)
+    def migrate_selection_script() -> Response:
+        return Response(
+            MIGRATE_SELECTION_SCRIPT,
             media_type="text/javascript; charset=utf-8",
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
@@ -208,6 +248,18 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             if review.week == wanted:
                 return review
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No published review for that week.")
+
+    def _migration(alerts: Iterable[queries.AlertRow] = ()) -> MigrationView | None:
+        """The hand-off to alerts-migration, with one status call for these alerts' rules."""
+        if settings.migration_url is None:
+            return None
+        rule_urls = [url for alert in alerts if (url := migratable_rule_url(alert))]
+        migrated = (
+            migration_status.migrated(rule_urls)
+            if migration_status is not None and rule_urls
+            else frozenset()
+        )
+        return MigrationView(settings.migration_url, migrated)
 
     def _summary(db: Database, selected: queries.Review) -> TeamSummary:
         return summarize(
@@ -243,11 +295,14 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             if tab == "history":
                 return HTMLResponse(tabs.history_page(reviews, selected))
             summary = _summary(db, selected)
+        if tab == "migration":
+            return HTMLResponse(
+                tabs.migration_page(reviews, selected, summary, migration=_migration())
+            )
         render = {
             "overview": tabs.overview_page,
             "volume": tabs.volume_page,
             "dashboards": tabs.dashboards_page,
-            "migration": tabs.migration_page,
             "slides": tabs.slides_page,
         }[tab]
         return HTMLResponse(render(reviews, selected, summary))
@@ -342,6 +397,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             )
             decided = queries.latest_decisions(db, selected.run_id, listing.rows)
             summary = _summary(db, selected)
+        # After the SQL connection is returned: the status call must not hold it.
         return HTMLResponse(
             tabs.fix_page(
                 reviews,
@@ -354,6 +410,7 @@ def build_portal(settings: PortalSettings) -> FastAPI:
                 schema=schema,
                 state=state,
                 rule=rule,
+                migration=_migration(listing.rows),
             )
         )
 
@@ -394,7 +451,9 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "That alert is not in this week's review."
             )
-        return HTMLResponse(tabs.alert_page(reviews, selected, detail))
+        return HTMLResponse(
+            tabs.alert_page(reviews, selected, detail, migration=_migration([detail.alert]))
+        )
 
     # Added last, so it is outermost: it also sees the guard's own refusals.
     app.add_middleware(RequestLogMiddleware)

@@ -27,6 +27,18 @@ when using a reverse proxy. The app queries only approved views even though the 
 SQL credential can have broader privileges. Obsolete `PORTAL_SQL_*` and `PORTAL_DATABASE`
 settings have no effect. Elasticsearch and model configuration are unnecessary.
 
+`PORTAL_MIGRATION_URL`, an optional `http(s)` base URL of the alerts-migration web app,
+adds a **Migrate ↗** link to v1 Grafana alerts with an `http(s)` rule link, on the alert page
+and in the Fix list. It opens `<PORTAL_MIGRATION_URL>/?rule_url=<rule URL>` in a new tab. Fix
+list rows also get a checkbox for **Migrate selected**, a plain GET form to the same address,
+and the Content-Security-Policy's `form-action` then admits that origin. The Migration tab
+links to alerts-migration. Unset, none of this is shown. With `PORTAL_MIGRATION_STATUS_TOKEN`
+as well, each Fix list or alert page makes one `POST <PORTAL_MIGRATION_API_URL>/api/rules/migration-status`
+call for its rules (at most 100 UIDs) and shows **✓ Migrated** instead of the link for those
+alerts-migration reports. `PORTAL_MIGRATION_API_URL` defaults to `PORTAL_MIGRATION_URL`, whose
+web app proxies `/api`. A page waits at most `PORTAL_MIGRATION_STATUS_TIMEOUT` seconds
+(default `1.0`); any failure logs `portal.migration_status_unavailable` and shows the plain links.
+
 `GET /healthz` checks every required column of all eleven reader views with `SELECT TOP 0`.
 It returns 503 if a view or required column is unavailable, without reading alert rows,
 querying database metadata or applying migrations. The packaged column contract matches

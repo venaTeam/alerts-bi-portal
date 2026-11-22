@@ -144,7 +144,10 @@ def fix(**filters: str) -> str:
         WorklistPage(alerts, len(alerts), 1, 25),
         {(a.alert_schema, a.application, a.key_field): {"P2": DECISION} for a in alerts[1:]},
         {"attention": 2, "all": 4},
-        **options,
+        show=options["show"],
+        schema=options["schema"],
+        state=options["state"],
+        rule=options["rule"],
     )
 
 

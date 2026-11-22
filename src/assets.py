@@ -37,6 +37,16 @@ STYLESHEET: Final = (
 .op-list .chip{white-space:normal;overflow-wrap:anywhere;font-family:var(--mono);background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
 .ops details summary{cursor:pointer;width:fit-content;font-size:12.5px;margin-top:6px}
 .ops details[open] summary{margin-bottom:6px}
+.alert-head{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between}
+.alert-head .alert-title{flex:1 1 320px;min-width:0}
+:root{--migrate:#1F6FEB;--migrated:#E6E9ED;--migrated-line:#D0D5DB;--migrated-ink:#5B6672}
+@media (prefers-color-scheme: dark){:root{--migrated:#222B33;--migrated-line:#3A4550;--migrated-ink:#B4BEC8}}
+.button.migrate,.button.migrate:visited{background:var(--migrate);border-color:var(--migrate);color:#FFFFFF;font-weight:600;white-space:nowrap}
+.button.migrate:disabled{opacity:.4;cursor:default}
+.button.migrated{background:var(--migrated);border-color:var(--migrated-line);color:var(--migrated-ink);cursor:default;white-space:nowrap}
+.migrate-bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:flex-end;padding:10px 20px;border-bottom:1px solid var(--line)}
+table.list .pick{width:1%;padding-right:0}
+table.list .pick input{width:16px;height:16px;margin:2px 0 0}
 @supports(top:anchor(bottom)){
   .app-popover.filter-popover,.menu-list.filter-popover{inset:auto;top:anchor(bottom);margin:8px 0 0;position-try-fallbacks:flip-block,flip-inline}
   .app-popover.filter-popover{position-anchor:--application-filter;left:anchor(left)}
@@ -91,4 +101,31 @@ APPLICATION_FILTER_SCRIPT: Final = """
 """
 APPLICATION_FILTER_SCRIPT_PATH: Final = (
     f"/assets/application-filter-{sha256(APPLICATION_FILTER_SCRIPT.encode()).hexdigest()[:12]}.js"
+)
+
+# Static code only; the checked boxes submit the migrate form without it.
+MIGRATE_SELECTION_SCRIPT: Final = """
+(() => {
+  const form = document.getElementById('migrate-selected');
+  if (!form) return;
+  const boxes = Array.from(document.querySelectorAll('input[form="migrate-selected"]'));
+  const count = form.querySelector('.migrate-count');
+  const total = form.querySelector('.migrate-total');
+  const button = form.querySelector('button[type="submit"]');
+  // alerts-migration opens at most this many rules per link.
+  const max = Number(form.dataset.max) || Infinity;
+  const update = () => {
+    const n = boxes.filter(box => box.checked).length;
+    const tooMany = n > max;
+    count.textContent = !n ? '' : tooMany ? `${n} selected; at most ${max} at once` : `${n} selected`;
+    total.textContent = n ? ` (${n})` : '';
+    button.disabled = n === 0 || tooMany;
+  };
+  boxes.forEach(box => box.addEventListener('change', update));
+  window.addEventListener('pageshow', update);
+  update();
+})();
+"""
+MIGRATE_SELECTION_SCRIPT_PATH: Final = (
+    f"/assets/migrate-selection-{sha256(MIGRATE_SELECTION_SCRIPT.encode()).hexdigest()[:12]}.js"
 )
