@@ -43,7 +43,7 @@ from alerts_bi_shared.ui.slides import render_slides
 
 from .application_filter import ApplicationFilter
 from .assets import MIGRATE_SELECTION_SCRIPT_PATH
-from .migration import MigrationView, migratable_rule_url
+from .migration import MAX_LINK_RULES, MigrationView, migratable_rule_url
 from .pages import (
     PHASE_STEPS,
     SCHEMA_NAMES,
@@ -683,7 +683,7 @@ def _migrate_columns(
     if not pickable:
         return cells, "", '<th scope="col"></th>', ""
     bar = (
-        f'<form class="migrate-bar" id="{MIGRATE_FORM}" method="get" '
+        f'<form class="migrate-bar" id="{MIGRATE_FORM}" data-max="{MAX_LINK_RULES}" method="get" '
         f'action="{h(migration.url + "/")}" target="_blank" rel="noopener noreferrer">'
         '<span class="sub migrate-count" aria-live="polite"></span>'
         '<button class="button migrate" type="submit">Migrate selected'

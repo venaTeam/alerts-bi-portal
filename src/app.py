@@ -135,8 +135,6 @@ def build_portal(settings: PortalSettings) -> FastAPI:
             yield
         finally:
             pool.dispose()
-            if migration_status is not None:
-                migration_status.close()
 
     app = FastAPI(
         lifespan=lifespan,

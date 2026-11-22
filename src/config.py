@@ -88,6 +88,16 @@ def parse_base_url(name: str, value: str) -> str | None:
     return value.rstrip("/")
 
 
+def parse_token(name: str, value: str) -> str | None:
+    """An optional bearer token: printable ASCII without spaces. The error never quotes it."""
+    value = value.strip()
+    if not value:
+        return None
+    if not all("!" <= ch <= "~" for ch in value):
+        raise ValueError(f"{name} must be printable ASCII without spaces or control characters")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class PortalSettings:
     """Where the portal listens, whom it admits, and its SQL connection."""
@@ -164,6 +174,8 @@ def load_portal_settings(
         page_size=page_size,
         migration_url=migration_url,
         migration_api_url=migration_api_url or migration_url,
-        migration_status_token=read_str("PORTAL_MIGRATION_STATUS_TOKEN").strip() or None,
+        migration_status_token=parse_token(
+            "PORTAL_MIGRATION_STATUS_TOKEN", read_str("PORTAL_MIGRATION_STATUS_TOKEN")
+        ),
         migration_status_timeout=timeout,
     )

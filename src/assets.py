@@ -112,11 +112,14 @@ MIGRATE_SELECTION_SCRIPT: Final = """
   const count = form.querySelector('.migrate-count');
   const total = form.querySelector('.migrate-total');
   const button = form.querySelector('button[type="submit"]');
+  // alerts-migration opens at most this many rules per link.
+  const max = Number(form.dataset.max) || Infinity;
   const update = () => {
     const n = boxes.filter(box => box.checked).length;
-    count.textContent = n ? `${n} selected` : '';
+    const tooMany = n > max;
+    count.textContent = !n ? '' : tooMany ? `${n} selected; at most ${max} at once` : `${n} selected`;
     total.textContent = n ? ` (${n})` : '';
-    button.disabled = n === 0;
+    button.disabled = n === 0 || tooMany;
   };
   boxes.forEach(box => box.addEventListener('change', update));
   window.addEventListener('pageshow', update);

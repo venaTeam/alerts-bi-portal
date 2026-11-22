@@ -2,19 +2,20 @@
 and which of their rules it has already migrated.
 
 Readers still only send GETs. The one outbound call asks alerts-migration which rule UIDs are
-migrated, once per page and bounded by a timeout; when it fails the page shows plain "Migrate"
-links.
+migrated, once per page (in parallel chunks when the page has more UIDs than one call takes)
+and bounded by a timeout; for a chunk that fails, the page shows plain "Migrate" links.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import time
+import urllib.error
 import urllib.request
-from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from threading import Thread
 from typing import Any, Final
 from urllib.parse import quote, urlencode, urlparse
 
@@ -24,6 +25,7 @@ from alerts_bi_shared.ui.html import safe_link
 from .queries import AlertRow
 
 __all__ = [
+    "MAX_LINK_RULES",
     "MAX_STATUS_UIDS",
     "STATUS_PATH",
     "MigrationStatus",
@@ -35,6 +37,8 @@ __all__ = [
 STATUS_PATH: Final = "/api/rules/migration-status"
 #: The status endpoint accepts at most this many UIDs per call.
 MAX_STATUS_UIDS: Final = 100
+#: alerts-migration opens at most this many rule_url values per link (its MAX_LINK_RULES).
+MAX_LINK_RULES: Final = 50
 _MAX_RESPONSE_BYTES: Final = 256 * 1024
 # Grafana rule pages, as migration-compliance parses them, without its last-segment fallback.
 _RULE_PATHS: Final = (
@@ -90,6 +94,36 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class _Call:
+    """One status request on its own daemon thread, so no page waits behind another page's
+    call and a stuck call never holds up shutdown."""
+
+    def __init__(self, ask: Callable[[list[str]], frozenset[str]], uids: list[str]) -> None:
+        self.uids = uids
+        self.migrated: frozenset[str] | None = None
+        self.failure: str | None = None
+        self._thread = Thread(target=self._run, args=(ask,), name="migration-status", daemon=True)
+        self._thread.start()
+
+    def _run(self, ask: Callable[[list[str]], frozenset[str]]) -> None:
+        try:
+            self.migrated = ask(self.uids)
+        except Exception as exc:
+            self.failure = _reason(exc)
+
+    def wait(self, deadline: float) -> None:
+        self._thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def _reason(exc: BaseException) -> str:
+    """Why a call failed, without the exception's text: it can quote the request headers."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, _StatusError):
+        return str(exc)
+    return type(exc).__name__
+
+
 class MigrationStatus:
     """Asks alerts-migration which rules it has migrated, at most ``timeout`` seconds per page."""
 
@@ -98,31 +132,36 @@ class MigrationStatus:
         self._token = token
         self._timeout = timeout
         self._opener = urllib.request.build_opener(_NoRedirect())
-        # The socket timeout does not bound DNS or a slow body, so the page waits on a future.
-        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="migration-status")
 
     def migrated(self, rule_urls: Iterable[str]) -> frozenset[str]:
-        """The UIDs among these rules that are migrated; empty when alerts-migration fails."""
-        uids = list(dict.fromkeys(uid for url in rule_urls if (uid := rule_uid(url))))
-        if not uids:
-            return frozenset()
-        future = self._pool.submit(self._ask, uids[:MAX_STATUS_UIDS])
+        """The UIDs among these rules that are migrated. Never raises: a chunk that fails or
+        misses the deadline counts as not migrated."""
         try:
-            return future.result(timeout=self._timeout)
-        except FutureTimeout:
-            future.cancel()
-            log.warn(
-                "portal.migration_status_unavailable",
-                "alerts-migration did not answer within {timeout}s; showing Migrate links",
-                timeout=self._timeout,
-            )
+            uids = list(dict.fromkeys(uid for url in rule_urls if (uid := rule_uid(url))))
+            deadline = time.monotonic() + self._timeout
+            calls = [
+                _Call(self._ask, uids[start : start + MAX_STATUS_UIDS])
+                for start in range(0, len(uids), MAX_STATUS_UIDS)
+            ]
+            for call in calls:
+                call.wait(deadline)
+            # Read each answer once: a late call may still finish while this runs.
+            answers = [call.migrated for call in calls]
+            migrated = frozenset[str]().union(*(a for a in answers if a is not None))
+            failures = [
+                call.failure or f"no answer within {self._timeout}s"
+                for call, answer in zip(calls, answers, strict=True)
+                if answer is None
+            ]
         except Exception as exc:
+            migrated, failures = frozenset(), [_reason(exc)]
+        if failures:
             log.warn(
                 "portal.migration_status_unavailable",
-                "alerts-migration status failed; showing Migrate links",
-                exc=exc,
+                "alerts-migration status failed ({reasons}); showing Migrate links for those rules",
+                reasons=sorted(set(failures)),
             )
-        return frozenset()
+        return migrated
 
     def _ask(self, uids: list[str]) -> frozenset[str]:
         request = urllib.request.Request(
@@ -142,6 +181,3 @@ class MigrationStatus:
         if not isinstance(migrated, list) or not all(isinstance(uid, str) for uid in migrated):
             raise _StatusError("the response has no list of migrated rule UIDs")
         return frozenset(migrated) & frozenset(uids)
-
-    def close(self) -> None:
-        self._pool.shutdown(wait=False, cancel_futures=True)

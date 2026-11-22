@@ -214,7 +214,7 @@ def test_each_eligible_row_has_a_checkbox_for_the_standalone_form() -> None:
     assert len(forms) == 2, "the application filter and the migrate form"
     migrate = next(form for form in forms if 'id="migrate-selected"' in form)
     assert migrate.startswith(
-        f'<form class="migrate-bar" id="migrate-selected" method="get" action="{MIGRATION}/" '
+        f'<form class="migrate-bar" id="migrate-selected" data-max="50" method="get" action="{MIGRATION}/" '
         'target="_blank" rel="noopener noreferrer">'
     )
     assert '<button class="button migrate" type="submit">Migrate selected' in migrate
@@ -375,6 +375,7 @@ class _Backend(ThreadingHTTPServer):
         self.body: bytes = b'{"migrated": []}'
         self.headers: dict[str, str] = {}
         self.hold = False
+        self.delay = 0.0
         self.release = threading.Event()
 
     @property
@@ -392,6 +393,7 @@ class _Handler(BaseHTTPRequestHandler):
         )
         if self.server.hold:
             self.server.release.wait(5)
+        time.sleep(self.server.delay)
         self.send_response(self.server.status)
         for name, value in self.server.headers.items():
             self.send_header(name, value)
@@ -420,11 +422,7 @@ def backend(no_proxy: None) -> Iterator[_Backend]:
 
 @contextmanager
 def status_client(url: str, timeout: float = 2.0) -> Iterator[MigrationStatus]:
-    status = MigrationStatus(url, TOKEN, timeout)
-    try:
-        yield status
-    finally:
-        status.close()
+    yield MigrationStatus(url, TOKEN, timeout)
 
 
 def test_the_status_call_sends_the_page_uids_once_with_the_token(backend: _Backend) -> None:
@@ -448,11 +446,37 @@ def test_no_rule_uid_means_no_call(backend: _Backend) -> None:
     assert backend.requests == []
 
 
-def test_at_most_the_endpoint_limit_of_uids_is_sent(backend: _Backend) -> None:
-    urls = [f"https://g.example/alerting/grafana/r{n}/view" for n in range(MAX_STATUS_UIDS + 5)]
+def test_more_uids_than_one_call_takes_are_sent_in_chunks(backend: _Backend) -> None:
+    urls = [f"https://g.example/alerting/grafana/r{n}/view" for n in range(2 * MAX_STATUS_UIDS + 5)]
+    backend.body = b'{"migrated": ["r0", "r150", "r204"]}'
     with status_client(backend.url) as status:
-        status.migrated(urls)
-    assert len(json.loads(backend.requests[0][3])["rule_uids"]) == MAX_STATUS_UIDS
+        assert status.migrated(urls) == frozenset({"r0", "r150", "r204"})
+    sizes = sorted(len(json.loads(body)["rule_uids"]) for _, _, _, body in backend.requests)
+    assert sizes == [5, MAX_STATUS_UIDS, MAX_STATUS_UIDS]
+
+
+def test_concurrent_pages_do_not_wait_on_each_other(backend: _Backend) -> None:
+    backend.delay = 0.6
+    backend.body = b'{"migrated": ["abc123"]}'
+    results: list[frozenset[str]] = []
+    with status_client(backend.url, timeout=1.0) as status:
+        threads = [
+            threading.Thread(target=lambda: results.append(status.migrated([RULE])))
+            for _ in range(10)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    assert results == [frozenset({"abc123"})] * 10
+
+
+def test_a_token_with_whitespace_is_refused_without_quoting_it(env: pytest.MonkeyPatch) -> None:
+    env.setenv("PORTAL_MIGRATION_URL", "https://migrate.example.test")
+    env.setenv("PORTAL_MIGRATION_STATUS_TOKEN", "first-part\nsecond-part")
+    with pytest.raises(ValueError) as error:
+        load_portal_settings()
+    assert "first-part" not in str(error.value)
 
 
 @pytest.mark.parametrize(
