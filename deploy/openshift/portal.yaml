@@ -51,6 +51,13 @@ objects:
                 - {name: PORTAL_PORT, value: "8100"}
                 - {name: PORTAL_ALLOWED_NETWORKS, value: "${PORTAL_ALLOWED_NETWORKS}"}
                 - {name: PORTAL_PAGE_SIZE, value: "${PORTAL_PAGE_SIZE}"}
+                # Optional alerts-migration hand-off; an empty PORTAL_MIGRATION_URL hides it.
+                - {name: PORTAL_MIGRATION_URL, value: "${PORTAL_MIGRATION_URL}"}
+                - {name: PORTAL_MIGRATION_API_URL, value: "${PORTAL_MIGRATION_API_URL}"}
+                - {name: PORTAL_MIGRATION_STATUS_TIMEOUT, value: "${PORTAL_MIGRATION_STATUS_TIMEOUT}"}
+                # Without this Secret the portal shows Migrate links but no migrated status.
+                - name: PORTAL_MIGRATION_STATUS_TOKEN
+                  valueFrom: {secretKeyRef: {name: "${PORTAL_MIGRATION_SECRET}", key: PORTAL_MIGRATION_STATUS_TOKEN, optional: true}}
                 # Only the SQL login, never the Elasticsearch or model credentials.
                 - name: SQL_USER
                   valueFrom: {secretKeyRef: {name: "${PORTAL_SQL_SECRET}", key: SQL_USER}}
@@ -128,6 +135,18 @@ parameters:
   - name: PORTAL_PAGE_SIZE
     description: Fix list rows per page, 1 to 200.
     value: "25"
+  - name: PORTAL_MIGRATION_URL
+    description: Optional http(s) address of the alerts-migration web app. Empty hides the Migrate links.
+    value: ""
+  - name: PORTAL_MIGRATION_API_URL
+    description: Optional http(s) base of the alerts-migration API. Empty uses PORTAL_MIGRATION_URL, which proxies /api.
+    value: ""
+  - name: PORTAL_MIGRATION_STATUS_TIMEOUT
+    description: Seconds a page waits for alerts-migration's migrated status, above 0 and at most 10.
+    value: "1.0"
+  - name: PORTAL_MIGRATION_SECRET
+    description: Optional Secret whose PORTAL_MIGRATION_STATUS_TOKEN key lets the portal ask alerts-migration which rules are migrated.
+    value: alerts-bi-portal-migration
   - name: PORTAL_REPLICAS
     description: Portal pods. The portal only reads; each pod keeps its own small SQL connection pool.
     value: "1"

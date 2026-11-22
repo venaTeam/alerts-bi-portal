@@ -18,7 +18,12 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from src.config import DEFAULT_ALLOWED_NETWORKS, DEFAULT_PORTAL_PORT, PortalSettings
+from src.config import (
+    DEFAULT_ALLOWED_NETWORKS,
+    DEFAULT_MIGRATION_STATUS_TIMEOUT,
+    DEFAULT_PORTAL_PORT,
+    PortalSettings,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy" / "openshift"
@@ -413,9 +418,18 @@ def test_template_sets_every_portal_setting_the_code_reads() -> None:
         "PORTAL_PORT",
         "PORTAL_ALLOWED_NETWORKS",
         "PORTAL_PAGE_SIZE",
+        "PORTAL_MIGRATION_URL",
+        "PORTAL_MIGRATION_API_URL",
+        "PORTAL_MIGRATION_STATUS_TIMEOUT",
+        "PORTAL_MIGRATION_STATUS_TOKEN",
     }
-    for name in portal_settings:
+    secret = "PORTAL_MIGRATION_STATUS_TOKEN"
+    for name in portal_settings - {secret}:
         assert f"{{name: {name}, value: " in objects, name
+    assert (
+        f"- name: {secret}\n                  valueFrom: {{secretKeyRef: "
+        f'{{name: "${{PORTAL_MIGRATION_SECRET}}", key: {secret}, optional: true}}}}'
+    ) in objects
 
 
 def test_defaults_match_the_application_defaults() -> None:
@@ -426,6 +440,9 @@ def test_defaults_match_the_application_defaults() -> None:
         field.default for field in dataclasses.fields(PortalSettings) if field.name == "page_size"
     )
     assert _default(parameters["PORTAL_PAGE_SIZE"]) == str(page_size)
+    timeout = _default(parameters["PORTAL_MIGRATION_STATUS_TIMEOUT"])
+    assert float(timeout) == DEFAULT_MIGRATION_STATUS_TIMEOUT
+    assert _default(parameters["PORTAL_MIGRATION_URL"]) == "", "off unless a deployment sets it"
     assert f'{{name: PORTAL_PORT, value: "{DEFAULT_PORTAL_PORT}"}}' in objects
     assert f"containerPort: {DEFAULT_PORTAL_PORT}" in objects
 
@@ -434,6 +451,12 @@ def test_template_reads_only_the_sql_login_and_shared_configuration() -> None:
     objects, _ = _template()
     keys = re.findall(r'secretKeyRef: \{name: "\$\{PORTAL_SQL_SECRET\}", key: ([A-Z_]+)\}', objects)
     assert keys == ["SQL_USER", "SQL_PASSWORD"]
+    # Besides the SQL login, only the optional alerts-migration status token.
+    assert re.findall(r"secretKeyRef: \{name: \"\$\{([A-Z_]+)\}\"", objects) == [
+        "PORTAL_MIGRATION_SECRET",
+        "PORTAL_SQL_SECRET",
+        "PORTAL_SQL_SECRET",
+    ]
     assert "secretRef" not in objects
     assert re.findall(r"configMapRef: \{name: ([a-z-]+)\}", objects) == ["alerts-bi-config"]
     assert re.findall(r"^\s*image: (.+)$", objects, flags=re.MULTILINE) == ['"${PORTAL_IMAGE}"']

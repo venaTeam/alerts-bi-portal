@@ -42,6 +42,8 @@ from alerts_bi_shared.ui.explain import (
 from alerts_bi_shared.ui.slides import render_slides
 
 from .application_filter import ApplicationFilter
+from .assets import MIGRATE_SELECTION_SCRIPT_PATH
+from .migration import MigrationView, migratable_rule_url
 from .pages import (
     PHASE_STEPS,
     SCHEMA_NAMES,
@@ -93,6 +95,8 @@ _STATE_CSS: Final = (
 _CHEVRON: Final = (
     '<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>'
 )
+#: The Fix list's "Migrate selected" form; the row checkboxes join it through ``form=``.
+MIGRATE_FORM: Final = "migrate-selected"
 
 
 # ------------------------------------------------------------------ small helpers
@@ -239,6 +243,19 @@ def _alert_cell(href: str, message: str | None, application: str, component: str
     )
 
 
+def _migrate_button(migration: MigrationView, rule_url: str) -> str:
+    """Open the rule in alerts-migration, or a grey, inert "✓ Migrated" once it is done."""
+    if migration.is_migrated(rule_url):
+        return (
+            '<span class="button migrated" aria-disabled="true">'
+            '<span aria-hidden="true">✓</span> Migrated</span>'
+        )
+    return (
+        f'<a class="button migrate" href="{h(migration.href(rule_url))}" target="_blank" '
+        'rel="noopener noreferrer">Migrate <span aria-hidden="true">↗</span></a>'
+    )
+
+
 # ------------------------------------------------------------------ the shell
 
 
@@ -281,6 +298,7 @@ def _page(
     *,
     crumb: str = "",
     filter_query: Mapping[str, str] | None = None,
+    scripts: Sequence[str] = (),
 ) -> str:
     label = {key: text for key, text, _ in TABS}[active]
     crumbs = (
@@ -311,6 +329,7 @@ def _page(
         + _tabs(selected, active)
         + context
         + body,
+        scripts,
     )
 
 
@@ -609,20 +628,68 @@ def _decision_chips(decisions: Mapping[str, Decision]) -> str:
     )
 
 
-def _alert_row(selected: Review, alert: AlertRow, decisions: Mapping[str, Decision]) -> str:
+def _alert_row(
+    selected: Review,
+    alert: AlertRow,
+    decisions: Mapping[str, Decision],
+    *,
+    pick: str = "",
+    action: str = "",
+) -> str:
     chips = _problems(alert)
     if not chips:
         css = "un" if alert.quality_state == "unassessed" else "good"
         chips.append(_chip(css, STATE_LABELS.get(alert.quality_state, alert.quality_state)))
     href = _alert_href(selected, alert.alert_schema, alert.application, alert.key_field)
     return (
-        "<tr>"
+        f"<tr>{pick}"
         f"{_alert_cell(href, alert.message, alert.application, alert.component)}"
         f"<td>{_schema_chip(alert.alert_schema)}</td>"
         f'<td><div class="why">{"".join(chips)}{_decision_chips(decisions)}</div></td>'
         f'<td class="num r"><b>{alert.row_count:,}</b></td>'
-        "</tr>"
+        f"{action}</tr>"
     )
+
+
+def _migrate_columns(
+    migration: MigrationView | None, alerts: Sequence[AlertRow]
+) -> tuple[list[tuple[str, str]], str, str, str]:
+    """The Fix list's hand-off: per alert its checkbox and Migrate cells, the two header cells
+    and the "Migrate selected" form. All empty when no alert on the page can be migrated.
+
+    Forms cannot nest and the application filter is one, so the checkboxes join this form
+    through ``form=`` and the browser builds ``?rule_url=…&rule_url=…`` itself."""
+    none: tuple[list[tuple[str, str]], str, str, str] = ([("", "")] * len(alerts), "", "", "")
+    if migration is None:
+        return none
+    targets = [migratable_rule_url(alert) for alert in alerts]
+    if not any(targets):
+        return none
+    selectable = [t if t and not migration.is_migrated(t) else None for t in targets]
+    pickable = any(selectable)
+    cells = []
+    for alert, target, box in zip(alerts, targets, selectable, strict=True):
+        check = (
+            f'<input type="checkbox" name="rule_url" value="{h(box)}" form="{MIGRATE_FORM}" '
+            f'aria-label="Select “{h(alert.message or "(no message)")}” to migrate">'
+            if box
+            else ""
+        )
+        pick = f'<td class="pick">{check}</td>' if pickable else ""
+        action = (
+            f'<td class="r">{_migrate_button(migration, target)}</td>' if target else "<td></td>"
+        )
+        cells.append((pick, action))
+    if not pickable:
+        return cells, "", '<th scope="col"></th>', ""
+    bar = (
+        f'<form class="migrate-bar" id="{MIGRATE_FORM}" method="get" '
+        f'action="{h(migration.url + "/")}" target="_blank" rel="noopener noreferrer">'
+        '<span class="sub migrate-count" aria-live="polite"></span>'
+        '<button class="button migrate" type="submit">Migrate selected'
+        '<span class="migrate-total"></span> <span aria-hidden="true">↗</span></button></form>'
+    )
+    return cells, '<th scope="col" class="pick"></th>', '<th scope="col"></th>', bar
 
 
 def fix_page(
@@ -637,6 +704,7 @@ def fix_page(
     schema: str,
     state: str,
     rule: str,
+    migration: MigrationView | None = None,
 ) -> str:
     def href(**changes: Any) -> str:
         current: dict[str, Any] = {
@@ -692,19 +760,23 @@ def fix_page(
         + "</div>"
     )
 
+    cells, lead, tail, bar = _migrate_columns(migration, listing.rows)
     if listing.rows:
         rows = "".join(
             _alert_row(
                 selected,
                 alert,
                 decided.get((alert.alert_schema, alert.application, alert.key_field), {}),
+                pick=pick,
+                action=action,
             )
-            for alert in listing.rows
+            for alert, (pick, action) in zip(listing.rows, cells, strict=True)
         )
         table = (
-            '<div class="table-wrap"><table class="list"><thead><tr>'
+            f'<div class="table-wrap"><table class="list"><thead><tr>{lead}'
             '<th scope="col">Alert</th><th scope="col">Schema</th><th scope="col">Problems</th>'
-            f'<th scope="col" class="r">Events</th></tr></thead><tbody>{rows}</tbody></table></div>'
+            f'<th scope="col" class="r">Events</th>{tail}</tr></thead><tbody>{rows}</tbody>'
+            "</table></div>"
         )
     else:
         clear = _tab_url(selected, "fix", show="all") + "#alerts"
@@ -734,7 +806,7 @@ def fix_page(
         f"{top}"
         '<section class="card" id="alerts">'
         f'<div class="card-h"><h2>Alerts <span class="sub">{count:,}</span></h2></div>'
-        f"{filters}{table}{pager}</section>"
+        f"{filters}{bar}{table}{pager}</section>"
     )
     return _page(
         reviews,
@@ -742,6 +814,7 @@ def fix_page(
         "fix",
         body,
         filter_query={"show": show, "schema": schema, "state": state, "rule": rule},
+        scripts=(MIGRATE_SELECTION_SCRIPT_PATH,) if bar else (),
     )
 
 
@@ -907,7 +980,13 @@ def dashboards_page(reviews: Sequence[Review], selected: Review, summary: TeamSu
 # ------------------------------------------------------------------ migration
 
 
-def migration_page(reviews: Sequence[Review], selected: Review, summary: TeamSummary) -> str:
+def migration_page(
+    reviews: Sequence[Review],
+    selected: Review,
+    summary: TeamSummary,
+    *,
+    migration: MigrationView | None = None,
+) -> str:
     phases = "".join(
         f"<li{' class="on"' if key == selected.phase else ''}><b>{h(PHASES[key][0])}</b>"
         f'<span class="sub">{h(PHASES[key][1])}</span></li>'
@@ -926,6 +1005,14 @@ def migration_page(reviews: Sequence[Review], selected: Review, summary: TeamSum
         )
     else:
         left = '<p class="sub">No v1 alert fired this week.</p>'
+    if migration is not None:
+        fix_list = _tab_url(selected, "fix", schema="v1") + "#alerts"
+        left += (
+            '<p class="sub">Move v1 Grafana rules with '
+            f'<a href="{h(migration.url + "/")}" target="_blank" rel="noopener noreferrer">'
+            'alerts-migration <span aria-hidden="true">↗</span></a>, or with Migrate in the '
+            f'<a href="{h(fix_list)}">Fix list</a>.</p>'
+        )
 
     critical = [a for a in v2 if _critical(a.severity) and "R9" in a.readiness_rule_ids]
     if v2:
@@ -1159,7 +1246,13 @@ def _model_block(alert: AlertRow, decisions: Mapping[str, Sequence[Decision]]) -
     )
 
 
-def alert_page(reviews: Sequence[Review], selected: Review, detail: AlertDetail) -> str:
+def alert_page(
+    reviews: Sequence[Review],
+    selected: Review,
+    detail: AlertDetail,
+    *,
+    migration: MigrationView | None = None,
+) -> str:
     alert = detail.alert
     v2 = alert.alert_schema == "v2"
     grafana = (alert.provider or "").lower() == "grafana"
@@ -1214,12 +1307,16 @@ def alert_page(reviews: Sequence[Review], selected: Review, detail: AlertDetail)
     chips = _problems(alert)
     back = _tab_url(selected, "fix") + "#alerts"
     message = alert.message or "(no message)"
+    title = f'<h2 class="alert-title">“{h(message)}”</h2>'
+    rule_url = migratable_rule_url(alert)
+    if migration is not None and rule_url:
+        title = f'<div class="alert-head">{title}{_migrate_button(migration, rule_url)}</div>'
     body = (
         f'<p class="back"><a href="{h(back)}">← Fix list</a></p>'
         '<section class="stack tight">'
         f'<div class="src">{h(alert.application)} &rsaquo; {h(alert.component or "—")} '
         f"{_schema_chip(alert.alert_schema)}</div>"
-        f'<h2 class="alert-title">“{h(message)}”</h2>'
+        f"{title}"
         f'<div class="why">{"".join(chips)}<span class="sub">{alert.row_count:,} events</span>'
         "</div></section>"
         '<div class="split"><div class="colmain">'

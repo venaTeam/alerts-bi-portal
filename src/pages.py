@@ -104,7 +104,9 @@ def alert_url(
 # ------------------------------------------------------------------ shell
 
 
-def layout(title: str, body: str) -> str:
+def layout(title: str, body: str, scripts: Sequence[str] = ()) -> str:
+    """The page shell; ``scripts`` are further local script paths this page needs."""
+    extra = "".join(f'<script src="{h(path)}" defer></script>' for path in scripts)
     return (
         "<!doctype html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
@@ -112,7 +114,7 @@ def layout(title: str, body: str) -> str:
         '<meta name="referrer" content="no-referrer">'
         f"<title>{h(title)} · Alerts BI</title>"
         f'<link rel="stylesheet" href="{STYLESHEET_PATH}">'
-        f'<script src="{APPLICATION_FILTER_SCRIPT_PATH}" defer></script>'
+        f'<script src="{APPLICATION_FILTER_SCRIPT_PATH}" defer></script>{extra}'
         "</head><body>"
         '<header class="topbar"><div class="wrap">'
         '<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>'
